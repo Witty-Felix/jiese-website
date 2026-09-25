@@ -1,14 +1,10 @@
 // GET /api/stats → 全员打卡统计（ADR-0004）
 // KV 键：checkin:<yyyy-mm-dd>:<昵称>；日期按 Asia/Shanghai
 // 返回：{ ok, today, rows: [{ nickname, total, streak, last_date, checked_today }] }
+// no-store：KV list 本就有最终一致延迟，不能再叠加浏览器/中间层缓存，否则「刷新无效果」
 
 import { shanghaiDate } from './_ima.js';
-
-function yesterdayOf(dateStr) {
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
+import { computeRow } from './_stats.js';
 
 export async function onRequestGet({ env }) {
   if (!env.STATS) return new Response(JSON.stringify({ ok: false, error: '服务端未配置 STATS' }), { status: 500, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
@@ -31,26 +27,11 @@ export async function onRequestGet({ env }) {
   } while (cursor);
 
   const today = shanghaiDate();
-  const yesterday = yesterdayOf(today);
-
-  const rows = [...byUser.entries()].map(([nickname, dates]) => {
-    const sorted = [...dates].sort().reverse(); // 新→旧
-    let streak = 0;
-    let expect = dates.has(today) ? today : (dates.has(yesterday) ? yesterday : null);
-    while (expect && dates.has(expect)) {
-      streak += 1;
-      expect = yesterdayOf(expect);
-    }
-    return {
-      nickname,
-      total: dates.size,
-      streak,
-      last_date: sorted[0],
-      checked_today: dates.has(today),
-    };
-  }).sort((a, b) => b.total - a.total || b.streak - a.streak || a.nickname.localeCompare(b.nickname, 'zh'));
+  const rows = [...byUser.entries()]
+    .map(([nickname, dates]) => computeRow(nickname, dates, today))
+    .sort((a, b) => b.total - a.total || b.streak - a.streak || a.nickname.localeCompare(b.nickname, 'zh'));
 
   return new Response(JSON.stringify({ ok: true, today, rows }), {
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }

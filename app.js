@@ -256,54 +256,88 @@ $('done-back').addEventListener('click', () => { show('checkin'); });
 
 /* ---------- 打卡榜 ---------- */
 
-async function loadStats() {
+// 最近一次成功拉取的榜单数据；删除后的即时更新基于它本地重渲（KV list 有最终一致延迟，不能回源重拉）
+let lastRows = null;
+let lastToday = '';
+
+function rowSort(a, b) {
+  return b.total - a.total || b.streak - a.streak || a.nickname.localeCompare(b.nickname, 'zh');
+}
+
+function buildStatsRow(r, me) {
+  const tr = document.createElement('tr');
+  if (r.nickname === me) tr.className = 'me';
+  const name = document.createElement('td');
+  name.textContent = r.nickname;
+  if (r.checked_today) {
+    const b = document.createElement('span');
+    b.className = 'badge'; b.textContent = '今日已打卡';
+    name.appendChild(b);
+  }
+  tr.appendChild(name);
+  for (const v of [r.total, r.streak, r.last_date]) {
+    const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+  }
+  // 管理操作列（ADR-0006）：仅管理模式下可见（CSS body.admin-mode 控制）
+  const actions = document.createElement('td');
+  actions.className = 'admin-col';
+  const acts = document.createElement('div');
+  acts.className = 'admin-actions';
+  const btnDay = document.createElement('button');
+  btnDay.type = 'button'; btnDay.className = 'btn btn-ghost btn-sm'; btnDay.textContent = '删某天';
+  btnDay.addEventListener('click', () => deleteDay(r.nickname));
+  const btnAll = document.createElement('button');
+  btnAll.type = 'button'; btnAll.className = 'btn btn-ghost btn-sm danger'; btnAll.textContent = '清空';
+  btnAll.addEventListener('click', () => clearUser(r.nickname));
+  acts.append(btnDay, btnAll);
+  actions.appendChild(acts);
+  tr.appendChild(actions);
+  return tr;
+}
+
+function renderStats(rows, today) {
   const body = $('stats-body');
   const empty = $('stats-empty');
+  const me = getUser()?.nickname;
+  body.innerHTML = '';
+  rows.forEach((r) => body.appendChild(buildStatsRow(r, me)));
+  empty.hidden = rows.length > 0;
+  empty.textContent = '还没有任何打卡记录，来当第一个吧。';
+  const t = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  $('stats-updated-line').textContent =
+    `统计日期 ${today} · 按累计天数排序 · 更新于 ${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
+}
+
+async function loadStats() {
+  const empty = $('stats-empty');
   try {
-    const res = await fetch('/api/stats');
+    const res = await fetch('/api/stats', { cache: 'no-store' });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
-    const me = getUser()?.nickname;
-    body.innerHTML = '';
-    data.rows.forEach((r) => {
-      const tr = document.createElement('tr');
-      if (r.nickname === me) tr.className = 'me';
-      const name = document.createElement('td');
-      name.textContent = r.nickname;
-      if (r.checked_today) {
-        const b = document.createElement('span');
-        b.className = 'badge'; b.textContent = '今日已打卡';
-        name.appendChild(b);
-      }
-      tr.appendChild(name);
-      for (const v of [r.total, r.streak, r.last_date]) {
-        const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
-      }
-      // 管理操作列（ADR-0006）：仅管理模式下可见（CSS body.admin-mode 控制）
-      const actions = document.createElement('td');
-      actions.className = 'admin-col';
-      const acts = document.createElement('div');
-      acts.className = 'admin-actions';
-      const btnDay = document.createElement('button');
-      btnDay.type = 'button'; btnDay.className = 'btn btn-ghost btn-sm'; btnDay.textContent = '删某天';
-      btnDay.addEventListener('click', () => deleteDay(r.nickname));
-      const btnAll = document.createElement('button');
-      btnAll.type = 'button'; btnAll.className = 'btn btn-ghost btn-sm danger'; btnAll.textContent = '清空';
-      btnAll.addEventListener('click', () => clearUser(r.nickname));
-      acts.append(btnDay, btnAll);
-      actions.appendChild(acts);
-      tr.appendChild(actions);
-      body.appendChild(tr);
-    });
-    empty.hidden = data.rows.length > 0;
-    $('stats-updated-line').textContent = `统计日期 ${data.today} · 按累计天数排序`;
+    lastRows = data.rows;
+    lastToday = data.today;
+    renderStats(lastRows, lastToday);
   } catch {
     empty.hidden = false;
     empty.textContent = '统计加载失败，请稍后刷新重试';
   }
 }
 
-$('refresh-stats').addEventListener('click', loadStats);
+// 删除后的本地即时更新：row 为该用户重算后的榜单行（null = 整户清空/无剩余记录）
+function applyRowUpdate(nickname, row) {
+  if (!lastRows) { loadStats(); return; }
+  lastRows = lastRows.filter((r) => r.nickname !== nickname);
+  if (row) lastRows.push(row);
+  lastRows.sort(rowSort);
+  renderStats(lastRows, lastToday);
+}
+
+$('refresh-stats').addEventListener('click', async () => {
+  const btn = $('refresh-stats');
+  btn.disabled = true; btn.textContent = '刷新中…';
+  try { await loadStats(); } finally { btn.disabled = false; btn.textContent = '刷新'; }
+});
 
 /* ---------- 管理模式（ADR-0006） ---------- */
 // 密码存 sessionStorage（随删除请求携带，不落 localStorage）；站内删除仅作用于 KV 统计，
@@ -371,9 +405,11 @@ async function deleteDay(nickname) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('日期格式应为 yyyy-mm-dd'); return; }
   if (!confirm(`确认删除 ${nickname} ${date} 的打卡统计记录？\n删除后当天可重新打卡；ima 知识库中的内容不受影响。`)) return;
   try {
-    await adminDelete({ nickname, date });
+    const r = await adminDelete({ nickname, date });
+    // 用响应中重算的行本地即时更新，避免 KV 最终一致延迟让已删记录短暂「复活」
+    if (r && 'row' in r) applyRowUpdate(nickname, r.row);
+    else loadStats(); // 兜底：旧版本 Function 未回传重算行
     alert('已删除 1 条记录');
-    loadStats();
   } catch (ex) {
     alert(ex.message);
   }
@@ -385,8 +421,8 @@ async function clearUser(nickname) {
   if (c.trim() !== nickname) { alert('昵称不一致，已取消'); return; }
   try {
     const r = await adminDelete({ nickname, all: true });
+    applyRowUpdate(nickname, null); // 整户清空：本地直接移除该行
     alert(`已删除 ${r.deleted} 条记录`);
-    loadStats();
   } catch (ex) {
     alert(ex.message);
   }
