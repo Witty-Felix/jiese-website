@@ -125,13 +125,35 @@ function bindFilebox(boxId, inputId, emptyId, pickedId, kind) {
     empty.hidden = true; picked.hidden = false;
     updateBtn();
   }
+
+  // 重置文件框：清空 input.files（否则同一文件无法再选）、预览区与已选文件变量
+  function reset() {
+    input.value = '';
+    if (kind === 'image') pickedImage = null; else pickedAudio = null;
+    picked.innerHTML = '';
+    picked.hidden = true;
+    empty.hidden = false;
+    updateBtn();
+  }
+
+  return { reset };
 }
 
-bindFilebox('box-image', 'input-image', 'empty-image', 'picked-image', 'image');
-bindFilebox('box-audio', 'input-audio', 'empty-audio', 'picked-audio', 'audio');
+const imageBox = bindFilebox('box-image', 'input-image', 'empty-image', 'picked-image', 'image');
+const audioBox = bindFilebox('box-audio', 'input-audio', 'empty-audio', 'picked-audio', 'audio');
 
 function updateBtn() {
   $('checkin-btn').disabled = !(pickedImage && pickedAudio);
+}
+
+// 打卡成功后表单必须回到「干净」状态：否则截图/录音仍挂在页面上，
+// updateBtn() 会让提交按钮再次可点，等于允许用同一批文件重复打卡
+function resetCheckinForm() {
+  imageBox.reset();
+  audioBox.reset();
+  reflectionEl.value = '';
+  $('reflection-count').textContent = '0';
+  localStorage.removeItem(LS_DRAFT);
 }
 
 const reflectionEl = $('input-reflection');
@@ -236,8 +258,7 @@ $('checkin-form').addEventListener('submit', async (e) => {
     if (!fin.ok) throw new Error(fin.error || '登记失败，请稍后重试');
 
     $('done-line').textContent = `${user.nickname} · ${fin.date} 已记录`;
-    localStorage.removeItem(LS_DRAFT);
-    reflectionEl.value = ''; $('reflection-count').textContent = '0';
+    resetCheckinForm(); // 清空截图/录音/感悟与草稿，回到可再次提交的干净状态
     show('done');
     loadStats();
   } catch (ex) {
