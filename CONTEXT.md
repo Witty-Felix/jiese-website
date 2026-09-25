@@ -18,6 +18,7 @@
 | 管理模式（Admin Mode） | 打卡榜内嵌的解锁态：输入管理密码后榜单行出现删除按钮（ADR-0006） |
 | 整户清空 | 删除某昵称全部打卡统计记录，该用户从打卡榜消失；ima 内容不受影响（ADR-0006） |
 | 审计记录（Audit Record） | KV 键 `audit:del:<时间戳>:<操作者>`，记录每次删除的目标、范围与条数；只写不读（ADR-0006） |
+| 删除标记（Deletion Marker） | KV 键 `deleted:<昵称>`，记录该用户被删掉的日期；`/api/stats` 用 get 读它把已删日期减掉，绕开 KV list 最长约 60s 的最终一致延迟；重新打卡会撤销该日标记（ADR-0007） |
 
 ## 相关文档
 
@@ -31,15 +32,17 @@
    │  ① POST /api/verify   { nickname, inviteCode }   —— 校验邀请码
    │  ② POST /api/checkin  multipart（感悟 + 截图 + 录音）
    │  ③ GET  /api/stats                                —— 全员打卡天数
+   │       list checkin:* → 逐用户 get deleted:*（ADR-0007，绕开 list 延迟）
    │  ④ DELETE /api/admin/checkin                      —— 管理员删 KV 统计（ADR-0006）
    │       { admin_password, operator, nickname, date | all: true }
+   │       写 deleted:<昵称> 删除标记（ADR-0007）；响应回传重算行供前端即时更新
    │       仅删 KV 统计记录；ima 内容无站内删除通道，只能在 ima 自行删除
    ▼
 Cloudflare Pages Functions（持 ima 凭证与 KV）
    │  create_media(图片/9) → COS 直传
    │  create_media(录音/15) → COS 直传
    │  import_doc(笔记) → add_knowledge 到用户文件夹
-   │  KV 写入打卡记录
+   │  KV 写入打卡记录（并撤销当日删除标记）
    ▼
 ima 共享知识库「戒色」/ <用户文件夹> / 按日期的笔记·图片·录音
 ```

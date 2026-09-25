@@ -5,6 +5,7 @@ import {
   MEDIA_TYPE, addKnowledgeFile, importNote, addKnowledgeNote,
   getUserFolder, shanghaiDate, shanghaiDateTime,
 } from './_ima.js';
+import { removeDeletedDate } from './_stats.js';
 
 const NICK_RE = /^[\u4e00-\u9fa5A-Za-z0-9·_\-]{2,16}$/;
 const IMAGE_MAX = 30 * 1024 * 1024;
@@ -103,8 +104,11 @@ export async function onRequestPost({ request, env }) {
   }
 
   // 统计记录：写入失败不阻断打卡成功（ADR-0004）
+  // 先撤销该日期的删除标记（ADR-0007）再写记录：顺序反了会出现「记录已写但仍被标记隐藏」，
+  // 反过来最坏只是标记清了而记录没写成，用户重试即可，不会隐藏合法打卡
   let statsUpdated = true;
   try {
+    await removeDeletedDate(env, nickname, date);
     await env.STATS.put(`checkin:${date}:${nickname}`, JSON.stringify({ ts: Date.now() }));
   } catch {
     statsUpdated = false;

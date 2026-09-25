@@ -3,12 +3,13 @@
 //   { admin_password, operator, nickname, all: true } → 整户清空（从打卡榜消失）
 // 数据边界：仅作用于 KV checkin:* 统计记录；ima 内容无站内删除通道，只能在 ima 客户端自行删除
 // 审计：audit:del:<ISO时间戳>:<operator>，只写不读，追责时到 Cloudflare KV 控制台按前缀查看
-// 响应附带 row（该用户重算后的榜单行）：KV list 最终一致（最长约 60s），前端据其做本地即时更新，
-// 避免删除后重新拉 /api/stats 时短暂「复活」已删记录
+// 删除标记（ADR-0007）：删除后写 deleted:<昵称> 记录被删日期，供 /api/stats 用 get 绕开
+//   KV list 的最终一致延迟（最长约 60s），否则清空后立即刷新会看到已删记录「复活」
+// 响应附带 row（该用户重算后的榜单行）：前端据其做本地即时更新，无需回源重拉
 
 import { json, requireAdmin } from './_auth.js';
 import { shanghaiDate } from '../_ima.js';
-import { computeRow } from '../_stats.js';
+import { computeRow, addDeletedDates, readDeletedDates } from '../_stats.js';
 
 const NICK_RE = /^[\u4e00-\u9fa5A-Za-z0-9·_\-]{2,16}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -28,13 +29,21 @@ async function listUserKeys(env, nickname, exclude) {
   return names;
 }
 
-// 由剩余键名重算该用户的榜单行（无剩余记录时返回 null）
-function rowFromKeys(nickname, names) {
+// 从键名中提取合法日期集合
+function datesFromKeys(names, nickname) {
   const dates = new Set();
   for (const name of names) {
     const d = name.slice('checkin:'.length, name.length - nickname.length - 1);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) dates.add(d);
+    if (DATE_RE.test(d)) dates.add(d);
   }
+  return dates;
+}
+
+// 由剩余键名重算该用户的榜单行（无剩余记录时返回 null）
+// deleted：本次被删日期，双保险剔除（list 延迟可能仍返回刚删的键）
+function rowFromKeys(nickname, names, deleted) {
+  const dates = datesFromKeys(names, nickname);
+  for (const d of deleted) dates.delete(d);
   return dates.size ? computeRow(nickname, dates, shanghaiDate()) : null;
 }
 
@@ -61,15 +70,17 @@ export async function onRequestDelete({ request, env }) {
   if (!all && !DATE_RE.test(date)) return json({ ok: false, error: 'date 需为 yyyy-mm-dd' }, 400);
 
   let deleted = 0;
-  let row = null;
+  let rest = [];
+  let removedDates = new Set();
   if (all) {
     const keys = await listUserKeys(env, nickname, new Set());
+    removedDates = datesFromKeys(keys, nickname);
     for (const name of keys) {
       await env.STATS.delete(name);
       deleted += 1;
     }
-    // 重算剩余行：显式排除刚删的键，绕过 KV list 的最终一致延迟
-    row = rowFromKeys(nickname, await listUserKeys(env, nickname, new Set(keys)));
+    // 显式排除刚删的键，绕过 KV list 的最终一致延迟
+    rest = await listUserKeys(env, nickname, new Set(keys));
   } else {
     const key = `checkin:${date}:${nickname}`;
     const existing = await env.STATS.get(key);
@@ -78,8 +89,23 @@ export async function onRequestDelete({ request, env }) {
     }
     await env.STATS.delete(key);
     deleted = 1;
-    row = rowFromKeys(nickname, await listUserKeys(env, nickname, new Set([key])));
+    removedDates = new Set([date]);
+    rest = await listUserKeys(env, nickname, new Set([key]));
   }
+
+  // 删除标记：写失败不回滚删除（统计退化为旧行为，最多短暂多显示已删行）
+  let marked = true;
+  try {
+    await addDeletedDates(env, nickname, removedDates);
+  } catch {
+    marked = false;
+  }
+
+  // 重算行必须与 /api/stats 同口径：扣除本次删除日期 + 已持久化的删除标记。
+  // 否则 list 延迟会让更早删掉的日期在乐观更新里短暂回流，与刷新后的真实榜单打架
+  const excluded = await readDeletedDates(env, nickname);
+  for (const d of removedDates) excluded.add(d);
+  const row = rowFromKeys(nickname, rest, excluded);
 
   // 审计只写不读：写失败不回滚删除，仅在响应中标记
   let auditWritten = true;
@@ -98,5 +124,5 @@ export async function onRequestDelete({ request, env }) {
     auditWritten = false;
   }
 
-  return json({ ok: true, scope: all ? 'user' : 'day', deleted, audit_written: auditWritten, row });
+  return json({ ok: true, scope: all ? 'user' : 'day', deleted, audit_written: auditWritten, marked, row });
 }
