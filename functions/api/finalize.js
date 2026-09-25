@@ -1,9 +1,9 @@
 // POST /api/finalize  JSON { nickname, invite_code, reflection, image: {media_id, cos_key, size}, audio: {...} }
-// 浏览器直传 COS 完成后调用：add_knowledge ×2 + 笔记链路 + KV 统计（ADR-0005 直传架构第三步）
+// 浏览器直传 COS 完成后调用：确保日期文件夹 → add_knowledge ×2 + 笔记链路 + KV 统计（ADR-0005 直传架构第三步）
 
 import {
   MEDIA_TYPE, addKnowledgeFile, importNote, addKnowledgeNote,
-  getUserFolder, shanghaiDate, shanghaiDateTime,
+  ensureUserFolder, ensureDayFolder, shanghaiDate, shanghaiDateTime,
 } from './_ima.js';
 import { removeDeletedDate } from './_stats.js';
 
@@ -53,9 +53,19 @@ export async function onRequestPost({ request, env }) {
   }
 
   const kbId = env.IMA_KB_ID;
-  const folderId = getUserFolder(env, nickname);
   const date = shanghaiDate();
   const dateTime = shanghaiDateTime();
+
+  // 目录结构（ADR-0008）：用户文件夹 → 日期文件夹，必须在任何 add_knowledge 之前就位。
+  // 分层降级：打卡永不因文件夹失败而失败；且日期文件夹只可能建在自己的用户文件夹内，否则不建。
+  const userFolderId = await ensureUserFolder(env, nickname);
+  const dayFolderId = await ensureDayFolder(env, userFolderId, date);
+  const folderId = dayFolderId || userFolderId; // 无日期文件夹 → 退回用户文件夹；再无 → 根目录
+  const folderLevel = dayFolderId ? 'day' : (userFolderId ? 'user' : 'root');
+  if (folderLevel !== 'day') {
+    // 降级如实暴露，不静默隐藏（响应里的 folder 字段 + 此处日志）
+    console.warn(`[finalize] 目录降级为 ${folderLevel}（${nickname} ${date}）`);
+  }
 
   try {
     const imgJob = addKnowledgeFile(env, {
@@ -118,5 +128,5 @@ export async function onRequestPost({ request, env }) {
     statsUpdated = false;
   }
 
-  return json({ ok: true, date, stats_updated: statsUpdated });
+  return json({ ok: true, date, stats_updated: statsUpdated, folder: folderLevel });
 }

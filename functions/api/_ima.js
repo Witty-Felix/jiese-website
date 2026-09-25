@@ -122,15 +122,94 @@ export async function addKnowledgeNote(env, { kbId, folderId, contentId, title }
   return imaPost(env, '/wiki/v1/add_knowledge', body);
 }
 
-// 用户文件夹映射（ADR-0003 回退路径）：IMA_USER_FOLDERS 为 JSON 字符串 {"昵称":"folder_xxx"}
-// 未配置或无该用户映射时返回 undefined → 落 KB 根目录
-export function getUserFolder(env, nickname) {
-  if (!env.IMA_USER_FOLDERS) return undefined;
+/* ---------- 目录结构：用户文件夹 / 日期文件夹（ADR-0008） ----------
+ * 接口契约（2026-09-25 实测）：POST /wiki/v1/create_folder，body { knowledge_base_id, name, folder_id? }
+ *   - 父级字段名**就是 `folder_id`**；写成 parent_folder_id 之类会被 protojson 静默忽略
+ *   - 省略 folder_id 建在知识库根目录；支持任意层级嵌套；name 限 1–255 字符
+ *   - 返回 { code: 0, data: { media_id } }，该 media_id 即 folder_id
+ *   - **非幂等**：同父级下重名 → code 220001「已存在同名知识」⇒ 必须「先查后建」
+ *   - **传入不存在的 folder_id 不报错**，会静默落到根目录 ⇒ 写入后必须回读校验
+ *   - 重名只在同一父级内冲突 ⇒ 各成员各自的日期文件夹不会互撞
+ * 官方 api.md（1.1.3 为最新）仍未收录该接口：服务端跑在文档前面，能力以实测为准。
+ */
+const FOLDER_MEDIA_TYPE = 99; // get_knowledge_list 中文件夹条目的 media_type
+const ALREADY_EXISTS_CODE = 220001;
+const LIST_PAGE_SIZE = 50; // 服务端单页上限
+// 枚举上限（10 页 × 50 = 500 条），防御游标异常导致的无界翻页。
+// 实测列表为**新→旧**排序，因此当天新建的日期文件夹必在第一页；该上限只影响极端规模下的兜底。
+const MAX_LIST_PAGES = 10;
+
+async function createFolder(env, { kbId, name, parentFolderId }) {
+  const body = { knowledge_base_id: kbId, name };
+  if (parentFolderId) body.folder_id = parentFolderId;
+  return imaPost(env, '/wiki/v1/create_folder', body);
+}
+
+async function listKnowledge(env, { kbId, folderId, cursor = '' }) {
+  const body = { knowledge_base_id: kbId, limit: LIST_PAGE_SIZE, cursor };
+  if (folderId) body.folder_id = folderId;
+  return imaPost(env, '/wiki/v1/get_knowledge_list', body);
+}
+
+// 在指定层级下按精确名称（大小写敏感）查找文件夹
+// 命中 → folder_id；未命中 → undefined；底层失败 → 抛出（交由 ensureFolder 降级）
+async function findFolder(env, { kbId, parentFolderId, name }) {
+  let cursor = '';
+  for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+    const res = await listKnowledge(env, { kbId, folderId: parentFolderId, cursor });
+    if (res.code !== 0) {
+      throw Object.assign(new Error(`枚举文件夹失败：${res.msg}`), { stage: 'get_knowledge_list' });
+    }
+    const list = res.data?.knowledge_list || [];
+    const hit = list.find((it) => it.media_type === FOLDER_MEDIA_TYPE && it.title === name);
+    if (hit?.media_id) return hit.media_id;
+    // 终止只认 is_end：实测 next_cursor 即使已到末尾仍返回非空串，用 cursor 判空会多查一轮
+    if (res.data?.is_end) return undefined;
+    cursor = res.data?.next_cursor || '';
+    if (!cursor) return undefined;
+  }
+  return undefined;
+}
+
+// 「确保存在」原语：查 → 建 → 回读。三步缺一不可（非幂等 + 静默落根，见文件头契约）。
+// 任何失败都返回 undefined 并留下告警，绝不抛出——登录与打卡不因目录故障而失败（ADR-0008 降级表）。
+async function ensureFolder(env, opts) {
   try {
-    return JSON.parse(env.IMA_USER_FOLDERS)[nickname];
-  } catch {
+    const existing = await findFolder(env, opts);
+    if (existing) return existing;
+
+    const res = await createFolder(env, opts);
+    if (res.code !== 0 && res.code !== ALREADY_EXISTS_CODE) {
+      throw Object.assign(new Error(`创建文件夹失败：${res.msg}`), { stage: 'create_folder' });
+    }
+    // 新建成功 → 回读确认确实落在预期父级下（父级无效时会静默落根）
+    // 并发撞名（220001）→ 重新枚举取回复用。两种情况共用同一次读取
+    return await findFolder(env, opts);
+  } catch (e) {
+    console.warn(`[ima] 文件夹确保失败（${opts.name}）：${e.message || e}`);
     return undefined;
   }
+}
+
+// 用户文件夹：知识库根目录下、以**昵称原文**命名，不做任何归一化。
+// 大小写敏感是刻意的——必须与 `checkin:<日期>:<昵称>`、榜单行、删除审计完全同一口径；
+// 若「聪明地」合并写法，会出现「一个人两个文件夹、榜单两行」的外溢矛盾。
+export async function ensureUserFolder(env, nickname) {
+  if (!env.IMA_KB_ID) {
+    // 部署缺配置属运维故障：必须留痕，否则「全员 degraded」会无从定位
+    console.warn('[ima] 未配置 IMA_KB_ID，无法确保用户文件夹');
+    return undefined;
+  }
+  return ensureFolder(env, { kbId: env.IMA_KB_ID, parentFolderId: undefined, name: nickname });
+}
+
+// 日期文件夹：用户文件夹下、以 YYYY-MM-DD（Asia/Shanghai）命名。
+// 父级由调用方**显式传入**，使「日期文件夹只能建在自己的用户文件夹内，否则就不建」成为签名层面的保证：
+// 拿不到用户文件夹时直接返回 undefined，绝不会在根目录建当日日期文件夹——
+// 否则两位成员同时降级且同日打卡时，后人会按重名规则复用前人的日期文件夹，造成内容静默混流。
+export async function ensureDayFolder(env, userFolderId, date) {
+  if (!env.IMA_KB_ID || !userFolderId) return undefined;
+  return ensureFolder(env, { kbId: env.IMA_KB_ID, parentFolderId: userFolderId, name: date });
 }
 
 // 时区工具：本站业务日期一律按 Asia/Shanghai

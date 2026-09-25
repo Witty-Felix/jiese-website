@@ -9,3 +9,6 @@ Thumbs.db
 .dev.vars
 .wrangler/
 node_modules/
+
+# 部署暂存目录（白名单拷贝产物，见 deploy.sh）
+.deploy/
