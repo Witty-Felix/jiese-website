@@ -86,13 +86,16 @@
       <div class="card">
         <div class="stats-head">
           <h2>打卡榜</h2>
-          <button class="btn btn-ghost btn-sm" id="refresh-stats">刷新</button>
+          <div class="stats-actions">
+            <button class="btn btn-ghost btn-sm" id="admin-toggle">管理</button>
+            <button class="btn btn-ghost btn-sm" id="refresh-stats">刷新</button>
+          </div>
         </div>
         <p class="hint" id="stats-updated-line"></p>
         <div class="table-scroll">
           <table id="stats-table">
             <thead>
-              <tr><th>成员</th><th>累计天数</th><th>连续天数</th><th>最近打卡</th></tr>
+              <tr><th>成员</th><th>累计天数</th><th>连续天数</th><th>最近打卡</th><th class="admin-col">管理操作</th></tr>
             </thead>
             <tbody id="stats-body"></tbody>
           </table>

@@ -14,6 +14,10 @@
 | 连续天数 | 当前连续未中断的打卡自然日数 |
 | ima KB「戒色」 | 腾讯 ima 共享知识库，所有打卡内容落库于此，按用户建文件夹 |
 | Pages Function | Cloudflare Pages 的后端函数层，持 ima 凭证并转发落库 |
+| 管理密码（Admin Password） | Pages Secret `ADMIN_PASSWORD`，站内删除操作的唯一凭证；与邀请码相互独立（ADR-0006） |
+| 管理模式（Admin Mode） | 打卡榜内嵌的解锁态：输入管理密码后榜单行出现删除按钮（ADR-0006） |
+| 整户清空 | 删除某昵称全部打卡统计记录，该用户从打卡榜消失；ima 内容不受影响（ADR-0006） |
+| 审计记录（Audit Record） | KV 键 `audit:del:<时间戳>:<操作者>`，记录每次删除的目标、范围与条数；只写不读（ADR-0006） |
 
 ## 相关文档
 
@@ -27,6 +31,9 @@
    │  ① POST /api/verify   { nickname, inviteCode }   —— 校验邀请码
    │  ② POST /api/checkin  multipart（感悟 + 截图 + 录音）
    │  ③ GET  /api/stats                                —— 全员打卡天数
+   │  ④ DELETE /api/admin/checkin                      —— 管理员删 KV 统计（ADR-0006）
+   │       { admin_password, operator, nickname, date | all: true }
+   │       仅删 KV 统计记录；ima 内容无站内删除通道，只能在 ima 自行删除
    ▼
 Cloudflare Pages Functions（持 ima 凭证与 KV）
    │  create_media(图片/9) → COS 直传

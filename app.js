@@ -279,6 +279,20 @@ async function loadStats() {
       for (const v of [r.total, r.streak, r.last_date]) {
         const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
       }
+      // 管理操作列（ADR-0006）：仅管理模式下可见（CSS body.admin-mode 控制）
+      const actions = document.createElement('td');
+      actions.className = 'admin-col';
+      const acts = document.createElement('div');
+      acts.className = 'admin-actions';
+      const btnDay = document.createElement('button');
+      btnDay.type = 'button'; btnDay.className = 'btn btn-ghost btn-sm'; btnDay.textContent = '删某天';
+      btnDay.addEventListener('click', () => deleteDay(r.nickname));
+      const btnAll = document.createElement('button');
+      btnAll.type = 'button'; btnAll.className = 'btn btn-ghost btn-sm danger'; btnAll.textContent = '清空';
+      btnAll.addEventListener('click', () => clearUser(r.nickname));
+      acts.append(btnDay, btnAll);
+      actions.appendChild(acts);
+      tr.appendChild(actions);
       body.appendChild(tr);
     });
     empty.hidden = data.rows.length > 0;
@@ -290,6 +304,96 @@ async function loadStats() {
 }
 
 $('refresh-stats').addEventListener('click', loadStats);
+
+/* ---------- 管理模式（ADR-0006） ---------- */
+// 密码存 sessionStorage（随删除请求携带，不落 localStorage）；站内删除仅作用于 KV 统计，
+// ima 知识库内容无站内删除通道，只能在 ima 客户端自行删除。
+
+const SS_ADMIN_PWD = 'jiese-admin-pwd';
+let adminMode = false;
+
+function setAdminMode(on) {
+  adminMode = on;
+  document.body.classList.toggle('admin-mode', on);
+  $('admin-toggle').textContent = on ? '退出管理' : '管理';
+}
+
+$('admin-toggle').addEventListener('click', async () => {
+  if (adminMode) {
+    sessionStorage.removeItem(SS_ADMIN_PWD);
+    setAdminMode(false);
+    return;
+  }
+  const pwd = prompt('请输入管理密码：');
+  if (!pwd) return;
+  try {
+    const res = await fetch('/api/admin/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_password: pwd }),
+    });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || '管理密码不正确'); return; }
+    sessionStorage.setItem(SS_ADMIN_PWD, pwd);
+    setAdminMode(true);
+    loadStats();
+  } catch {
+    alert('验证失败，请稍后重试');
+  }
+});
+
+async function adminDelete(payload) {
+  const res = await fetch('/api/admin/checkin', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...payload,
+      admin_password: sessionStorage.getItem(SS_ADMIN_PWD) || '',
+      operator: getUser()?.nickname || 'admin',
+    }),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: '响应解析失败' }));
+  if (res.status === 401) {
+    // 密码失效（服务端已更换）：自动退回未解锁态
+    sessionStorage.removeItem(SS_ADMIN_PWD);
+    setAdminMode(false);
+    throw new Error(data.error || '管理密码已失效，请重新解锁');
+  }
+  if (!data.ok) throw new Error(data.error || '删除失败，请稍后重试');
+  return data;
+}
+
+async function deleteDay(nickname) {
+  const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+  const raw = prompt(`删除 ${nickname} 哪一天的打卡记录？\n格式 yyyy-mm-dd，例如 ${today}`);
+  if (!raw) return;
+  const date = raw.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('日期格式应为 yyyy-mm-dd'); return; }
+  if (!confirm(`确认删除 ${nickname} ${date} 的打卡统计记录？\n删除后当天可重新打卡；ima 知识库中的内容不受影响。`)) return;
+  try {
+    await adminDelete({ nickname, date });
+    alert('已删除 1 条记录');
+    loadStats();
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+async function clearUser(nickname) {
+  const c = prompt(`⚠️ 整户清空不可恢复！\n将删除 ${nickname} 的全部打卡统计记录（从打卡榜消失）。\nima 知识库中的内容不受影响，只能在 ima 客户端自行删除。\n\n请输入该成员昵称以确认：`);
+  if (c === null) return;
+  if (c.trim() !== nickname) { alert('昵称不一致，已取消'); return; }
+  try {
+    const r = await adminDelete({ nickname, all: true });
+    alert(`已删除 ${r.deleted} 条记录`);
+    loadStats();
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+// 刷新页面后 sessionStorage 存活期内自动恢复管理模式
+if (sessionStorage.getItem(SS_ADMIN_PWD)) setAdminMode(true);
 
 /* ---------- 入口 ---------- */
 

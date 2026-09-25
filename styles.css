@@ -113,6 +113,13 @@ textarea { resize: vertical; min-height: 88px; }
 
 /* 打卡榜 */
 .stats-head { display: flex; justify-content: space-between; align-items: center; }
+.stats-actions { display: flex; gap: 8px; }
+
+/* 管理操作列（ADR-0006）：仅 body.admin-mode 下可见 */
+.admin-col { display: none; }
+body.admin-mode .admin-col { display: table-cell; }
+.admin-actions { display: flex; gap: 6px; }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
 .table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
