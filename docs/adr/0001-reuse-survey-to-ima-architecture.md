@@ -36,5 +36,7 @@
   - **`StringToSign = sha1\n{KeyTime}\n{sha1(HttpString)}\n` —— KeyTime 只出现一次**（写成两段会 SignatureDoesNotMatch，本次实现踩过）。
 - `add_knowledge` 文件类：顶层 `media_id` + `file_info{cos_key, file_size, last_modify_time}`（不是 `media_info`）；图片=9、音频=15；音频 ≤200MB/2h，图片 ≤30MB。
 - Workers 环境实测：Cloudflare Pages Function 内用 WebCrypto（HMAC-SHA1）完成 COS 签名可行，图片/音频/笔记三链路均在线上验证成功。
-- 「戒色」KB OpenAPI ID：`HrUauicYcEEIIGTkFGPlF9ZHWUQ7wb_97t9wn6zuTeQ=`（经 get_addable_knowledge_base_list 获取，需传 `{"limit":50}`）。
+- 「戒色」KB 的 OpenAPI ID 为 **base64 形式**（与 ima 界面里显示的纯数字知识库 ID 不同源，两者不可互换）；
+  取值经 `get_addable_knowledge_base_list`（需传 `{"limit":50}`）获得，实际值存放在 Cloudflare Secret `IMA_KB_ID`，
+  **不写入仓库**（本仓库为公开仓库，资源标识同样不外泄）。
 - 本机 `~/.config/ima` 凭证已于 2026-09-25 轮换更新；旧 Key（09-02 生成）当时已失效（报 `200002 skill auth failed`）。

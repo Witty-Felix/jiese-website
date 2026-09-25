@@ -1,5 +1,8 @@
 # CONTEXT.md — 戒色打卡站（jiese-checkin）
 
+版本：**v1.0.0**（2026-09-25 首个稳定版，见 `README.md` 与 `docs/adr/0001`–`0007`）
+线上地址：https://jiese-checkin.pages.dev
+
 一句话：一个轻量打卡网站，成员用昵称+邀请码进入，每天上传运动截图与阅读录音，内容沉淀到 ima 共享知识库「戒色」，打卡天数全员可见。
 
 ## 词汇表（Glossary）
