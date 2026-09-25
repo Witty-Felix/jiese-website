@@ -5,7 +5,7 @@
 // 删除标记（ADR-0007）：list 延迟会让已删键短暂残留，用 get 读 deleted:<昵称> 把已删日期减掉
 
 import { shanghaiDate } from './_ima.js';
-import { computeRow, readDeletedDates } from './_stats.js';
+import { computeRowExcluding, readDeletedDates, parseCheckinKey } from './_stats.js';
 
 export async function onRequestGet({ env }) {
   if (!env.STATS) return new Response(JSON.stringify({ ok: false, error: '服务端未配置 STATS' }), { status: 500, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
@@ -15,14 +15,10 @@ export async function onRequestGet({ env }) {
   do {
     const page = await env.STATS.list({ prefix: 'checkin:', cursor });
     for (const k of page.keys) {
-      const rest = k.name.slice('checkin:'.length);
-      const i = rest.indexOf(':');
-      if (i <= 0) continue;
-      const date = rest.slice(0, i);
-      const nick = rest.slice(i + 1);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !nick) continue;
-      if (!byUser.has(nick)) byUser.set(nick, new Set());
-      byUser.get(nick).add(date);
+      const parsed = parseCheckinKey(k.name);
+      if (!parsed) continue;
+      if (!byUser.has(parsed.nickname)) byUser.set(parsed.nickname, new Set());
+      byUser.get(parsed.nickname).add(parsed.date);
     }
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
@@ -32,10 +28,7 @@ export async function onRequestGet({ env }) {
   // 每个用户一次 get（仅对名单内用户），据此剔除 list 尚未收敛的已删日期
   const marked = await Promise.all(entries.map(([nickname]) => readDeletedDates(env, nickname)));
   const rows = entries
-    .map(([nickname, dates], i) => {
-      for (const d of marked[i]) dates.delete(d);
-      return dates.size ? computeRow(nickname, dates, today) : null;
-    })
+    .map(([nickname, dates], i) => computeRowExcluding(nickname, dates, marked[i], today))
     .filter(Boolean)
     .sort((a, b) => b.total - a.total || b.streak - a.streak || a.nickname.localeCompare(b.nickname, 'zh'));
 

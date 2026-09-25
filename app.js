@@ -115,12 +115,7 @@ function bindFilebox(boxId, inputId, emptyId, pickedId, kind) {
     picked.appendChild(meta);
     const clear = document.createElement('button');
     clear.type = 'button'; clear.className = 'btn btn-ghost btn-sm clear'; clear.textContent = '移除';
-    clear.addEventListener('click', () => {
-      input.value = '';
-      if (isImage) pickedImage = null; else pickedAudio = null;
-      empty.hidden = false; picked.hidden = true;
-      updateBtn();
-    });
+    clear.addEventListener('click', reset); // 与整体重置同一套清理逻辑，避免两处口径漂移
     picked.appendChild(clear);
     empty.hidden = true; picked.hidden = false;
     updateBtn();
@@ -418,6 +413,13 @@ async function adminDelete(payload) {
   return data;
 }
 
+// marked=false 表示删除标记未写入：KV list 同步窗口内刷新可能短暂看到已删记录（ADR-0007）
+function markWarn(r) {
+  return r?.marked === false
+    ? '\n\n注意：统计过滤标记写入失败，刷新后可能短暂看到这条记录，稍后会自动消失。'
+    : '';
+}
+
 async function deleteDay(nickname) {
   const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
   const raw = prompt(`删除 ${nickname} 哪一天的打卡记录？\n格式 yyyy-mm-dd，例如 ${today}`);
@@ -430,7 +432,7 @@ async function deleteDay(nickname) {
     // 用响应中重算的行本地即时更新，避免 KV 最终一致延迟让已删记录短暂「复活」
     if (r && 'row' in r) applyRowUpdate(nickname, r.row);
     else loadStats(); // 兜底：旧版本 Function 未回传重算行
-    alert('已删除 1 条记录');
+    alert('已删除 1 条记录' + markWarn(r));
   } catch (ex) {
     alert(ex.message);
   }
@@ -442,8 +444,11 @@ async function clearUser(nickname) {
   if (c.trim() !== nickname) { alert('昵称不一致，已取消'); return; }
   try {
     const r = await adminDelete({ nickname, all: true });
-    applyRowUpdate(nickname, null); // 整户清空：本地直接移除该行
-    alert(`已删除 ${r.deleted} 条记录`);
+    // 用响应中重算的行本地即时更新（正常情况下 row=null = 已无记录，直接移除该行）；
+    // 若仍有剩余记录（并发新打卡等），以服务端重算结果为准，避免乐观 UI 与刷新后的榜单打架
+    if (r && 'row' in r) applyRowUpdate(nickname, r.row);
+    else loadStats();
+    alert(`已删除 ${r.deleted} 条记录` + markWarn(r));
   } catch (ex) {
     alert(ex.message);
   }

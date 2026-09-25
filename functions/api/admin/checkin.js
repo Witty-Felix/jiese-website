@@ -5,14 +5,14 @@
 // 审计：audit:del:<ISO时间戳>:<operator>，只写不读，追责时到 Cloudflare KV 控制台按前缀查看
 // 删除标记（ADR-0007）：删除后写 deleted:<昵称> 记录被删日期，供 /api/stats 用 get 绕开
 //   KV list 的最终一致延迟（最长约 60s），否则清空后立即刷新会看到已删记录「复活」
-// 响应附带 row（该用户重算后的榜单行）：前端据其做本地即时更新，无需回源重拉
+// 响应附带 row（该用户重算后的榜单行，口径与 /api/stats 完全一致，null = 已无记录），
+//   marked = 删除标记是否写入成功，前端据此提示「刷新后可能短暂复现」
 
 import { json, requireAdmin } from './_auth.js';
 import { shanghaiDate } from '../_ima.js';
-import { computeRow, addDeletedDates, readDeletedDates } from '../_stats.js';
+import { DATE_RE, addDeletedDates, computeRowExcluding, parseCheckinKey, readDeletedDates } from '../_stats.js';
 
 const NICK_RE = /^[\u4e00-\u9fa5A-Za-z0-9·_\-]{2,16}$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const OP_RE = /^[\u4e00-\u9fa5A-Za-z0-9·_\-]{1,32}$/;
 
 // 列出某昵称的全部 checkin 键名（排除 exclude 集合）；KV list 最终一致，删除后需显式排除刚删的键
@@ -22,29 +22,22 @@ async function listUserKeys(env, nickname, exclude) {
   do {
     const page = await env.STATS.list({ prefix: 'checkin:', cursor });
     for (const k of page.keys) {
-      if (!exclude.has(k.name) && k.name.endsWith(`:${nickname}`)) names.push(k.name);
+      if (exclude.has(k.name)) continue;
+      if (parseCheckinKey(k.name)?.nickname === nickname) names.push(k.name);
     }
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
   return names;
 }
 
-// 从键名中提取合法日期集合
+// 从键名中提取日期集合（键名解析口径由 _stats.js 统一提供）
 function datesFromKeys(names, nickname) {
   const dates = new Set();
   for (const name of names) {
-    const d = name.slice('checkin:'.length, name.length - nickname.length - 1);
-    if (DATE_RE.test(d)) dates.add(d);
+    const parsed = parseCheckinKey(name);
+    if (parsed && parsed.nickname === nickname) dates.add(parsed.date);
   }
   return dates;
-}
-
-// 由剩余键名重算该用户的榜单行（无剩余记录时返回 null）
-// deleted：本次被删日期，双保险剔除（list 延迟可能仍返回刚删的键）
-function rowFromKeys(nickname, names, deleted) {
-  const dates = datesFromKeys(names, nickname);
-  for (const d of deleted) dates.delete(d);
-  return dates.size ? computeRow(nickname, dates, shanghaiDate()) : null;
 }
 
 export async function onRequestDelete({ request, env }) {
@@ -105,7 +98,7 @@ export async function onRequestDelete({ request, env }) {
   // 否则 list 延迟会让更早删掉的日期在乐观更新里短暂回流，与刷新后的真实榜单打架
   const excluded = await readDeletedDates(env, nickname);
   for (const d of removedDates) excluded.add(d);
-  const row = rowFromKeys(nickname, rest, excluded);
+  const row = computeRowExcluding(nickname, datesFromKeys(rest, nickname), excluded, shanghaiDate());
 
   // 审计只写不读：写失败不回滚删除，仅在响应中标记
   let auditWritten = true;
