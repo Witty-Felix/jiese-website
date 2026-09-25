@@ -61,7 +61,7 @@
               <input id="input-audio" type="file" accept=".mp3,.m4a,.wav,.aac,audio/mpeg,audio/mp4,audio/wav,audio/aac" hidden />
               <div class="filebox-empty" id="empty-audio">
                 <strong>点击选择或拖入录音</strong>
-                <span>MP3 / M4A / WAV / AAC，≤ 95MB</span>
+                <span>MP3 / M4A / WAV / AAC，≤ 200MB</span>
               </div>
               <div class="filebox-picked" id="picked-audio" hidden></div>
             </div>
@@ -77,8 +77,9 @@
           <p id="checkin-error" class="error" hidden></p>
           <button type="submit" class="btn btn-primary btn-block" id="checkin-btn" disabled>提交打卡</button>
           <div id="progress" class="progress" hidden>
-            <div class="spinner"></div><span id="progress-text">准备上传…</span>
+            <div class="spinner"></div><span id="progress-text">上传材料中…</span>
           </div>
+          <div id="progress-bar" class="bar" hidden><div id="progress-bar-fill"></div></div>
         </form>
       </div>
 

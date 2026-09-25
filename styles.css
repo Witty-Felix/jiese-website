@@ -101,6 +101,16 @@ textarea { resize: vertical; min-height: 88px; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 上传进度条 */
+.bar {
+  height: 8px; border-radius: 999px; background: var(--teal-soft);
+  overflow: hidden; margin-top: 10px;
+}
+.bar > div {
+  height: 100%; width: 0%; border-radius: 999px;
+  background: var(--teal); transition: width .2s;
+}
+
 /* 打卡榜 */
 .stats-head { display: flex; justify-content: space-between; align-items: center; }
 .table-scroll { overflow-x: auto; }

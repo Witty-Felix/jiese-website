@@ -48,16 +48,17 @@ async function sha1Hex(msg) {
   return hex(await crypto.subtle.digest('SHA-1', enc(msg)));
 }
 
-// Step 2：COS PUT 直传（签名算法对齐官方 cos-upload.cjs：签名 content-length + host）
-export async function cosUpload(cred, bytes, contentType) {
+// COS 预签名（content-length + host，对齐官方 cos-upload.cjs 签名面）
+export function buildCosUrl(cred) {
+  return `https://${cred.bucket_name}.cos.${cred.region}.myqcloud.com/${cred.cos_key}`;
+}
+
+export async function signCosAuthorization(cred, fileSize) {
   const host = `${cred.bucket_name}.cos.${cred.region}.myqcloud.com`;
   const keyTime = `${cred.start_time};${cred.expired_time}`;
   const signKey = await hmacSha1Hex(cred.secret_key, keyTime);
 
-  const signHeaders = {
-    'content-length': String(bytes.byteLength),
-    host,
-  };
+  const signHeaders = { 'content-length': String(fileSize), host };
   const names = Object.keys(signHeaders).sort();
   const headerList = names.join(';');
   const httpHeaders = names.map((k) => `${k}=${encodeURIComponent(signHeaders[k])}`).join('&');
@@ -65,15 +66,21 @@ export async function cosUpload(cred, bytes, contentType) {
   const stringToSign = `sha1\n${keyTime}\n${await sha1Hex(httpString)}\n`;
   const signature = await hmacSha1Hex(signKey, stringToSign);
 
-  const auth =
+  const authorization =
     `q-sign-algorithm=sha1&q-ak=${cred.secret_id}&q-sign-time=${keyTime}` +
     `&q-key-time=${keyTime}&q-header-list=${headerList}&q-url-param-list=` +
     `&q-signature=${signature}`;
+  return { authorization, host };
+}
+
+// Step 2：COS PUT 直传（服务端转发场景）
+export async function cosUpload(cred, bytes, contentType) {
+  const { authorization, host } = await signCosAuthorization(cred, bytes.byteLength);
 
   const res = await fetch(`https://${host}/${cred.cos_key}`, {
     method: 'PUT',
     headers: {
-      Authorization: auth,
+      Authorization: authorization,
       'x-cos-security-token': cred.token,
       'Content-Type': contentType || 'application/octet-stream',
     },

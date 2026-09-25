@@ -94,7 +94,7 @@ function bindFilebox(boxId, inputId, emptyId, pickedId, kind) {
       : /\.(mp3|m4a|wav|aac)$/i.test(file.name);
     if (!ok) { alert(isImage ? '请选择 PNG/JPG/WebP 图片' : '请选择 MP3/M4A/WAV/AAC 音频'); return; }
     if (isImage && file.size > 30 * 1024 * 1024) { alert('图片超过 30MB'); return; }
-    if (!isImage && file.size > 95 * 1024 * 1024) { alert('录音超过 95MB'); return; }
+    if (!isImage && file.size > 200 * 1024 * 1024) { alert('录音超过 200MB'); return; }
     if (isImage) pickedImage = file; else pickedAudio = file;
 
     picked.innerHTML = '';
@@ -144,6 +144,28 @@ try {
   if (draft?.reflection) { reflectionEl.value = draft.reflection; $('reflection-count').textContent = String(draft.reflection.length); }
 } catch { /* 忽略 */ }
 
+// 浏览器直传 COS（ADR-0005）：预签好 Authorization，跳过服务器中转
+function cosPut(item, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', item.cos_url);
+    xhr.setRequestHeader('Authorization', item.authorization);
+    xhr.setRequestHeader('x-cos-security-token', item.token);
+    xhr.setRequestHeader('Content-Type', blob.type || 'application/octet-stream');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(true);
+      else reject(new Error(`截图/录音直传失败（HTTP ${xhr.status}），请重试`));
+    };
+    xhr.onerror = () => reject(new Error('直传网络错误，请重试'));
+    xhr.ontimeout = () => reject(new Error('直传超时，请重试'));
+    xhr.timeout = 600000;
+    xhr.send(blob);
+  });
+}
+
 $('checkin-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const user = getUser();
@@ -154,22 +176,66 @@ $('checkin-form').addEventListener('submit', async (e) => {
   const btn = $('checkin-btn');
   const progress = $('progress');
   const pText = $('progress-text');
+  const bar = $('progress-bar');
+  const barFill = $('progress-bar-fill');
+  const setProgress = (text, pct) => {
+    pText.textContent = text;
+    if (pct == null) { bar.hidden = true; }
+    else { bar.hidden = false; barFill.style.width = pct + '%'; }
+  };
   btn.disabled = true; btn.hidden = true;
   progress.hidden = false;
-  pText.textContent = '上传运动截图…';
-
-  const fd = new FormData();
-  fd.append('nickname', user.nickname);
-  fd.append('invite_code', user.invite_code);
-  fd.append('reflection', reflectionEl.value);
-  fd.append('image', pickedImage);
-  fd.append('audio', pickedAudio);
+  setProgress('准备直传…', null);
 
   try {
-    const res = await fetch('/api/checkin', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || '提交失败，请稍后重试');
-    $('done-line').textContent = `${user.nickname} · ${data.date} 已记录`;
+    // ① 准备：服务端校验 + 签发直传凭证
+    const prepRes = await fetch('/api/prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nickname: user.nickname,
+        invite_code: user.invite_code,
+        image: { size: pickedImage.size, type: pickedImage.type },
+        audio: { size: pickedAudio.size, type: pickedAudio.type },
+      }),
+    });
+    const prep = await prepRes.json();
+    if (!prep.ok) throw new Error(prep.error || '准备直传失败');
+
+    // ② 直传：两个文件并行推到 COS，进度按总字节合并显示
+    const total = pickedImage.size + pickedAudio.size;
+    let doneBytes = 0;
+    const mkTracker = (size) => {
+      let last = 0;
+      return (loaded) => {
+        doneBytes += loaded - last;
+        last = loaded;
+        const pct = Math.min(99, Math.floor((doneBytes / total) * 100));
+        setProgress(`直传材料中 ${pct}%`, pct);
+      };
+    };
+    await Promise.all([
+      cosPut(prep.image, pickedImage, mkTracker(pickedImage.size)),
+      cosPut(prep.audio, pickedAudio, mkTracker(pickedAudio.size)),
+    ]);
+    setProgress('材料已到知识库存储，正在登记打卡…', 99);
+
+    // ③ 登记：入库 ima + 写统计
+    const finRes = await fetch('/api/finalize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nickname: user.nickname,
+        invite_code: user.invite_code,
+        reflection: reflectionEl.value,
+        image: { media_id: prep.image.media_id, cos_key: prep.image.cos_key, size: pickedImage.size },
+        audio: { media_id: prep.audio.media_id, cos_key: prep.audio.cos_key, size: pickedAudio.size },
+      }),
+    });
+    const fin = await finRes.json();
+    if (!fin.ok) throw new Error(fin.error || '登记失败，请稍后重试');
+
+    $('done-line').textContent = `${user.nickname} · ${fin.date} 已记录`;
     localStorage.removeItem(LS_DRAFT);
     reflectionEl.value = ''; $('reflection-count').textContent = '0';
     show('done');
@@ -180,6 +246,8 @@ $('checkin-form').addEventListener('submit', async (e) => {
   } finally {
     btn.disabled = false; btn.hidden = false;
     progress.hidden = true;
+    bar.hidden = true;
+    barFill.style.width = '0%';
     updateBtn();
   }
 });

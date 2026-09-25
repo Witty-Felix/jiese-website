@@ -2,7 +2,7 @@
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
-> **Status note (2026-09-25):** This repo has no git remote yet. Before using `gh issue ...`, initialize git and connect a GitHub remote (e.g. under `Witty-Felix`). Until then, skills that write to the tracker should surface this requirement instead of failing silently.
+> **Status (2026-09-25):** Remote is `git@github.com:Witty-Felix/jiese-website.git` (GitHub, public). `gh` is logged in as `Witty-Felix`. Note: GitHub does not allow non-ASCII repo names, so the local project name 戒色网站 maps to repo `jiese-website`.
 
 ## Conventions
 
