@@ -1,0 +1,8 @@
+name = "jiese-checkin"
+pages_build_output_dir = "."
+compatibility_date = "2025-01-01"
+
+# 打卡统计 KV（ADR-0004）；namespace id 部署时由 `wrangler kv namespace create STATS` 生成后填入
+[[kv_namespaces]]
+binding = "STATS"
+id = "facf59e7eb2842f2aa8fb40eb306496c"

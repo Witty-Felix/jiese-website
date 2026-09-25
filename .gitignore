@@ -4,3 +4,8 @@
 # 系统文件
 Thumbs.db
 .DS_Store
+
+# Cloudflare 本地开发
+.dev.vars
+.wrangler/
+node_modules/

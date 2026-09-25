@@ -1,0 +1,38 @@
+# CONTEXT.md — 戒色打卡站（jiese-checkin）
+
+一句话：一个轻量打卡网站，成员用昵称+邀请码进入，每天上传运动截图与阅读录音，内容沉淀到 ima 共享知识库「戒色」，打卡天数全员可见。
+
+## 词汇表（Glossary）
+
+| 术语 | 定义 |
+|------|------|
+| 打卡（Check-in） | 一次完整的每日提交 = 1 条笔记 + 1 张运动时长截图 + 1 段阅读录音 |
+| 运动截图 | 运动类 App 显示运动视频/锻炼时长的截图（图片文件，非视频本身） |
+| 阅读录音 | 朗读戒色文章的音频文件（mp3/m4a/wav/aac） |
+| 邀请码 | 共享口令，用于进入打卡界面；本身不标识身份，昵称才是身份 |
+| 打卡天数 | 某用户累计打卡的自然日数量（去重） |
+| 连续天数 | 当前连续未中断的打卡自然日数 |
+| ima KB「戒色」 | 腾讯 ima 共享知识库，所有打卡内容落库于此，按用户建文件夹 |
+| Pages Function | Cloudflare Pages 的后端函数层，持 ima 凭证并转发落库 |
+
+## 相关文档
+
+- `docs/adr/` — 架构决策记录
+- 参考资料：WorkBuddy 空间《调查问卷网站实现机理总结》（survey-to-ima 同源架构）
+
+## 架构总览
+
+```
+浏览器（纯静态前端 index.html / app.js / styles.css）
+   │  ① POST /api/verify   { nickname, inviteCode }   —— 校验邀请码
+   │  ② POST /api/checkin  multipart（感悟 + 截图 + 录音）
+   │  ③ GET  /api/stats                                —— 全员打卡天数
+   ▼
+Cloudflare Pages Functions（持 ima 凭证与 KV）
+   │  create_media(图片/9) → COS 直传
+   │  create_media(录音/15) → COS 直传
+   │  import_doc(笔记) → add_knowledge 到用户文件夹
+   │  KV 写入打卡记录
+   ▼
+ima 共享知识库「戒色」/ <用户文件夹> / 按日期的笔记·图片·录音
+```

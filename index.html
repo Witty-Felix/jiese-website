@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>戒色打卡 · 每天进步一点点</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <!-- 登录视图 -->
+    <section id="view-login" class="view" hidden>
+      <div class="card card-narrow">
+        <h1>戒色打卡</h1>
+        <p class="sub">每一次打卡，都是对自己的一次承诺。</p>
+        <form id="login-form" novalidate>
+          <label for="login-nickname">昵称</label>
+          <input id="login-nickname" name="nickname" type="text" maxlength="16"
+                 placeholder="2–16 位，中文/字母/数字" autocomplete="off" required />
+          <label for="login-invite">邀请码</label>
+          <input id="login-invite" name="invite_code" type="password"
+                 placeholder="向管理员获取" required />
+          <p id="login-error" class="error" hidden></p>
+          <button type="submit" class="btn btn-primary" id="login-btn">进入打卡</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 打卡视图 -->
+    <section id="view-checkin" class="view" hidden>
+      <header class="topbar">
+        <div>
+          <h1>戒色打卡</h1>
+          <p class="sub" id="today-line"></p>
+        </div>
+        <div class="userbox">
+          <span class="nickname" id="user-nickname"></span>
+          <button class="btn btn-ghost btn-sm" id="logout-btn">退出</button>
+        </div>
+      </header>
+
+      <div class="card">
+        <h2>今日打卡</h2>
+        <p class="hint">两项材料都传好才算打卡成功：运动截图 + 阅读录音。同一天可多次打卡，天数不重复计。</p>
+        <form id="checkin-form" novalidate>
+          <div class="field">
+            <label for="input-image">运动时长截图 <span class="req">必填</span></label>
+            <div class="filebox" id="box-image" tabindex="0" role="button" aria-label="选择运动截图">
+              <input id="input-image" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+              <div class="filebox-empty" id="empty-image">
+                <strong>点击选择或拖入截图</strong>
+                <span>PNG / JPG / WebP，≤ 30MB（运动 App 的时长页面截图即可）</span>
+              </div>
+              <div class="filebox-picked" id="picked-image" hidden></div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="input-audio">阅读戒色文章录音 <span class="req">必填</span></label>
+            <div class="filebox" id="box-audio" tabindex="0" role="button" aria-label="选择阅读录音">
+              <input id="input-audio" type="file" accept=".mp3,.m4a,.wav,.aac,audio/mpeg,audio/mp4,audio/wav,audio/aac" hidden />
+              <div class="filebox-empty" id="empty-audio">
+                <strong>点击选择或拖入录音</strong>
+                <span>MP3 / M4A / WAV / AAC，≤ 95MB</span>
+              </div>
+              <div class="filebox-picked" id="picked-audio" hidden></div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="input-reflection">今日感悟 <span class="opt">选填</span></label>
+            <textarea id="input-reflection" rows="4" maxlength="2000"
+                      placeholder="今天想对自己说的话：坚持的理由、克服的冲动、明天的计划……"></textarea>
+            <div class="counter"><span id="reflection-count">0</span> / 2000</div>
+          </div>
+
+          <p id="checkin-error" class="error" hidden></p>
+          <button type="submit" class="btn btn-primary btn-block" id="checkin-btn" disabled>提交打卡</button>
+          <div id="progress" class="progress" hidden>
+            <div class="spinner"></div><span id="progress-text">准备上传…</span>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="stats-head">
+          <h2>打卡榜</h2>
+          <button class="btn btn-ghost btn-sm" id="refresh-stats">刷新</button>
+        </div>
+        <p class="hint" id="stats-updated-line"></p>
+        <div class="table-scroll">
+          <table id="stats-table">
+            <thead>
+              <tr><th>成员</th><th>累计天数</th><th>连续天数</th><th>最近打卡</th></tr>
+            </thead>
+            <tbody id="stats-body"></tbody>
+          </table>
+        </div>
+        <p id="stats-empty" class="hint" hidden>还没有任何打卡记录，来当第一个吧。</p>
+      </div>
+
+      <footer class="foot">
+        <p>打卡内容同步沉淀至 ima 共享知识库「戒色」· 每天进步一点点 💪</p>
+      </footer>
+    </section>
+
+    <!-- 成功视图 -->
+    <section id="view-done" class="view" hidden>
+      <div class="card card-narrow done-card">
+        <div class="done-mark">✓</div>
+        <h2>打卡成功！</h2>
+        <p class="sub" id="done-line"></p>
+        <p class="hint">截图、录音和打卡笔记已存入 ima 知识库「戒色」。</p>
+        <button class="btn btn-primary btn-block" id="done-back">继续查看打卡榜</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
