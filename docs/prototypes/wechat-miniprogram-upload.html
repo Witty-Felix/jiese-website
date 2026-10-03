@@ -1,0 +1,1074 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PROTOTYPE · 微信小程序上传流程</title>
+<style>
+/* 一次性的原型：三个结构不同的流程变体，用 ?variant=A|B|C 切换（底部浮条 / 左右方向键）。
+   问题：小程序打卡的流程骨架应该长什么样。
+   约束来源：研究 #3（chooseMessageFile 能力）、#4（后端复用）、#5（独立完整入口）、ADR-0005（COS 直传）。 */
+:root {
+  --ink: #17211e; --muted: #68746f; --faint: #93a09a;
+  --line: #dce5e1; --line-deep: #c3d0cb; --bg: #f4f7f5; --card: #fff;
+  --teal: #0f6e56; --teal-deep: #07513f; --teal-soft: #e1f5ee; --teal-mid: #9fe1cb;
+  --danger: #a32d2d; --danger-soft: #fcebeb; --danger-line: #f0c9c9;
+  --amber: #8b5e00; --amber-soft: #fff4d6;
+  --shadow: 0 14px 40px rgba(31, 52, 45, .08);
+  --radius: 16px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: var(--bg);
+  font: 15px/1.55 "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; }
+.page { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 120px; }
+.eyebrow { color: var(--teal); font-size: 12px; font-weight: 700; letter-spacing: .12em; }
+h1 { margin: 5px 0 4px; font-size: clamp(23px, 4vw, 33px); line-height: 1.2; }
+.lede { max-width: 780px; margin: 0; color: var(--muted); }
+.context { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 26px; }
+.pill { border: 1px solid var(--line); border-radius: 999px; color: var(--muted);
+  background: rgba(255,255,255,.7); padding: 5px 11px; font-size: 12px; }
+.pill.warn { border-color: #f0d8ad; background: var(--amber-soft); color: var(--amber); }
+.pill.ok { border-color: #b6dcc7; background: var(--teal-soft); color: var(--teal); font-weight: 600; }
+/* 决策横幅：把「已落定 / 仍开放」写在最上面，避免读者再去猜哪个是候选 */
+.decision { max-width: 860px; margin: 16px 0 4px; background: var(--card); border: 1px solid var(--line);
+  border-left: 3px solid var(--teal); border-radius: var(--radius); padding: 14px 16px; }
+.decision > b { display: block; font-size: 12.5px; color: var(--teal); letter-spacing: .04em; margin-bottom: 9px; }
+.drow { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; color: var(--muted);
+  line-height: 1.55; padding: 4px 0; }
+.dtag { flex: none; width: 52px; text-align: center; border-radius: 999px; font-size: 11px;
+  padding: 2px 0; font-weight: 600; }
+.dtag.ok { background: var(--teal-soft); color: var(--teal); }
+.dtag.warn { background: var(--amber-soft); color: var(--amber); }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 26px; align-items: start; }
+@media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: clamp(16px, 3vw, 26px); }
+.notes { display: grid; gap: 14px; }
+.sidebox { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+.sidebox h3 { margin: 0 0 10px; font-size: 14px; letter-spacing: .02em; }
+.sidebox p { margin: 0; color: var(--muted); font-size: 13px; }
+.bullet { display: flex; gap: 9px; font-size: 13px; color: var(--muted); }
+.bullet + .bullet { margin-top: 9px; }
+.bullet b { color: var(--ink); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-deep); flex: none; margin-top: 7px; }
+.dot.ok { background: var(--teal); }
+.dot.bad { background: var(--danger); }
+.dot.warn { background: #d9a300; }
+
+.stage { display: flex; justify-content: center; padding: 6px 0 4px; }
+.phone { position: relative; width: 360px; max-width: 100%; height: 720px; background: #fff;
+  border: 9px solid #1d2a26; border-radius: 40px; box-shadow: 0 22px 50px rgba(23,33,30,.22);
+  display: flex; flex-direction: column; overflow: hidden; }
+.notch { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 6;
+  width: 116px; height: 22px; background: #1d2a26; border-radius: 0 0 14px 14px; }
+.navbar { flex: none; position: relative; z-index: 5; padding: 27px 14px 10px; background: #fff;
+  display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+.navbar .cap { flex: 1; text-align: center; font-size: 15px; font-weight: 600; }
+.navbar .ico { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--muted); font-size: 16px; flex: none; }
+.screenwrap { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background: var(--bg); }
+.screenwrap::-webkit-scrollbar { width: 0; }
+
+.body { padding: 14px; display: grid; gap: 12px; }
+h2.t { margin: 0; font-size: 17px; letter-spacing: .01em; }
+p.sub { margin: 0; color: var(--muted); font-size: 12.5px; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 13px; }
+.card.err { border-color: var(--danger-line); background: var(--danger-soft); }
+.card.warnbox { border-color: #f0d8ad; background: var(--amber-soft); }
+.field { display: grid; gap: 6px; }
+.field label { font-size: 12.5px; color: var(--muted); }
+.input { width: 100%; border: 1px solid var(--line-deep); border-radius: 10px; padding: 10px 12px;
+  background: #fff; color: var(--ink); outline: none; }
+.input:focus { border-color: var(--teal); }
+textarea.input { resize: vertical; min-height: 74px; line-height: 1.5; }
+.btn { border: 1px solid var(--line-deep); background: #fff; color: var(--ink); border-radius: 10px;
+  padding: 9px 14px; font-weight: 600; font-size: 13.5px; }
+.btn:hover { border-color: var(--teal); color: var(--teal-deep); }
+.btn.primary { background: var(--teal); border-color: var(--teal); color: #fff; }
+.btn.primary:hover { background: var(--teal-deep); color: #fff; }
+.btn.ghost { background: transparent; }
+.btn.block { width: 100%; }
+.btn.sm { padding: 6px 11px; font-size: 12.5px; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.btn[disabled]:hover { border-color: var(--line-deep); color: var(--ink); }
+.btn.primary[disabled]:hover { background: var(--teal); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row.between { justify-content: space-between; align-items: center; }
+.kind { display: flex; align-items: center; gap: 10px; }
+.kind .ico { width: 34px; height: 34px; border-radius: 9px; background: var(--teal-soft); color: var(--teal-deep);
+  display: grid; place-items: center; font-size: 15px; flex: none; }
+.kind .ico.aud { background: #eef2ff; color: #3b4a9c; }
+.kind .txt { min-width: 0; flex: 1; }
+.kind .txt b { display: block; font-size: 13.5px; }
+.kind .txt span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.meta { font-size: 11.5px; color: var(--faint); }
+.fileline { display: flex; align-items: center; gap: 9px; padding: 9px 0; border-top: 1px dashed var(--line);
+  font-size: 12.5px; color: var(--muted); }
+.fileline b { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.msgbox { border-radius: 10px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; }
+.msgbox.bad { background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger-line); }
+.msgbox.ok { background: var(--teal-soft); color: var(--teal-deep); border: 1px solid var(--teal-mid); }
+.msgbox.warn { background: #fff8e8; color: var(--amber); border: 1px solid #f0d8ad; }
+.msgbox.info { background: #fff; color: var(--muted); border: 1px solid var(--line); }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip { border: 1px dashed var(--line-deep); border-radius: 999px; padding: 5px 11px; font-size: 12px;
+  color: var(--muted); background: #fff; }
+.chip:hover { border-color: var(--teal); color: var(--teal-deep); }
+.chip.on { border-style: solid; border-color: var(--teal); background: var(--teal-soft); color: var(--teal-deep); font-weight: 600; }
+.chip.bad { border-color: var(--danger-line); color: var(--danger); background: var(--danger-soft); }
+.progress { height: 7px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.progress > i { display: block; height: 100%; background: var(--teal); width: 0; }
+.statusline { display: flex; gap: 9px; font-size: 12.5px; color: var(--faint); align-items: center; }
+.statusline + .statusline { margin-top: 8px; }
+.statusline b { color: var(--muted); font-weight: 500; }
+.statusline.active b { color: var(--ink); font-weight: 600; }
+.statusline.done b { color: var(--teal-deep); }
+.spinner { width: 13px; height: 13px; border: 2px solid var(--teal-mid); border-top-color: var(--teal);
+  border-radius: 50%; animation: spin .7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.okmark { width: 14px; height: 14px; border-radius: 50%; background: var(--teal); color: #fff;
+  display: grid; place-items: center; font-size: 9px; flex: none; }
+.bigocheck { width: 62px; height: 62px; border-radius: 50%; background: var(--teal-soft); color: var(--teal);
+  display: grid; place-items: center; font-size: 31px; margin: 16px auto 12px; }
+.center { text-align: center; }
+.datechip { display: inline-block; border: 1px solid var(--teal-mid); background: var(--teal-soft);
+  color: var(--teal-deep); border-radius: 999px; padding: 5px 13px; font-size: 12.5px; font-weight: 600; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.kv b { color: var(--ink); font-weight: 600; text-align: right; }
+.counter { color: var(--faint); font-size: 11.5px; text-align: right; }
+.seg { display: flex; border: 1px solid var(--line-deep); border-radius: 10px; overflow: hidden; }
+.seg > button { flex: 1; border: 0; background: #fff; padding: 6px 0; font-size: 12px; color: var(--muted); }
+.seg > button + button { border-left: 1px solid var(--line); }
+.seg > button.on { background: var(--teal-soft); color: var(--teal-deep); font-weight: 700; }
+.gate { border-top: 1px solid var(--line); margin-top: 2px; padding-top: 12px; }
+.navbar .back { cursor: pointer; }
+.navbar .back.off { visibility: hidden; }
+
+/* A：分步向导 */
+.rails { display: flex; gap: 6px; }
+.rails > i { flex: 1; height: 4px; border-radius: 999px; background: var(--line); }
+.rails > i.on { background: var(--teal); }
+.rails > i.now { background: var(--teal-mid); }
+.stephead .n { color: var(--teal); font-weight: 700; font-size: 11.5px; letter-spacing: .08em; }
+.slot { border: 1px solid var(--line); border-radius: 12px; padding: 11px; background: #fff; display: grid; gap: 9px; }
+.slot.filled { border-color: var(--teal-mid); background: #fbfffd; }
+.slot.bad { border-color: var(--danger-line); background: var(--danger-soft); }
+.slot .note { font-size: 11.5px; color: var(--faint); }
+.approve .tick { display: flex; gap: 9px; font-size: 13px; cursor: pointer; }
+.approve .tick + .tick { margin-top: 9px; }
+.approve .tick .box { width: 17px; height: 17px; border: 1px solid var(--line-deep); border-radius: 5px;
+  flex: none; margin-top: 2px; display: grid; place-items: center; font-size: 11px; color: transparent; background:#fff; }
+.approve .tick.on .box { background: var(--teal); border-color: var(--teal); color: #fff; }
+.routegrid { display: grid; gap: 9px; }
+.routecard { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: #fff; }
+.routecard.main { border-color: var(--teal-mid); background: #fbfffd; }
+.routecard h3 { margin: 0 0 4px; font-size: 14px; }
+.routecard p { margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
+.routeeyebrow { color: var(--teal); font-size: 11px; font-weight: 700; letter-spacing: .06em; margin-bottom: 3px; }
+.routecard.secondary .routeeyebrow { color: var(--muted); }
+.resulttag { display: inline-block; border-radius: 999px; padding: 3px 8px; background: var(--teal-soft); color: var(--teal-deep); font-size: 11px; font-weight: 700; }
+
+/* B：单屏画布 / C：极简双入口 */
+.dropbig { width: 100%; border: 1.5px dashed var(--teal-mid); border-radius: 14px; background: #fbfffd;
+  padding: 15px 13px; text-align: center; display: grid; gap: 4px; }
+.dropbig:hover { border-color: var(--teal); }
+.dropbig b { font-size: 13.5px; }
+.dropbig span { font-size: 11.5px; color: var(--muted); }
+.dropbig.small { padding: 11px; }
+.pending { display: flex; align-items: center; gap: 9px; padding: 10px 11px; border-radius: 11px;
+  background: #fff; border: 1px dashed var(--line-deep); font-size: 13px; color: var(--muted); }
+.pending.ok { background: #fbfffd; border-style: solid; border-color: var(--teal-mid); color: var(--ink); }
+.pending.bad { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); }
+.pending .pico { width: 28px; height: 28px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line);
+  display: grid; place-items: center; font-size: 13px; color: var(--faint); flex: none; }
+.pending.ok .pico { background: var(--teal-soft); border-color: var(--teal-mid); color: var(--teal-deep); }
+.pending .x { margin-left: auto; color: var(--faint); font-size: 15px; padding: 0 3px; }
+.pending .x:hover { color: var(--danger); }
+.stickyfoot { position: sticky; bottom: 0; background: #fff; border-top: 1px solid var(--line);
+  padding: 11px 14px; display: grid; gap: 7px; }
+.sheet-mask { position: absolute; inset: 0; background: rgba(23,33,30,.42); z-index: 8; display: grid; place-items: end; }
+.sheet { background: #fff; width: 100%; border-radius: 18px 18px 0 0; padding: 16px; display: grid; gap: 9px; }
+
+/* ── 共享：微信文件导入链（按真机复刻） ──
+   只剩一个中间态：深色系统原生选择器（.nmask / .npage）。
+   真机里位于它前后的两个白底小程序页（ima 自建的「空态引导页」与「已选暂存页」）
+   已于 2026-10-01 一并拍板省去，因此本项目**没有自建的小程序页面**；
+   配套样式（.pmask/.ppage/.mpnav/.mpico/.mpcap/.mpbody/.mpempty/.mpempty-t/.mpbtn/.mphint
+   以及更早的 .mpsel-head/.mpfile/.mpfico/.mpfmeta/.mpfoot/.mpadd/.mpgo）全部删除。
+   如需还原任一页，形态见 git 历史（本文件 v4 / v5）。 */
+
+/* 系统原生选择器：深色、贴近 OS */
+.nmask { position: absolute; inset: 0; z-index: 13; display: flex; background: #111; }
+.npage { flex: 1; display: flex; flex-direction: column; min-height: 0;
+  background: #191919; color: #ececec; }
+.nnav { flex: none; padding: 27px 12px 10px; display: flex; align-items: center; gap: 6px;
+  border-bottom: 1px solid #2c2c2c; }
+.nnav b { flex: 1; text-align: center; font-size: 15px; color: #f5f5f5; }
+.nico { width: 34px; height: 30px; display: grid; place-items: center; color: #b9b9b9;
+  font-size: 17px; flex: none; cursor: pointer; }
+.nico.txt { font-size: 13px; width: 42px; }
+.nico:hover { color: #fff; }
+.nsearch { flex: none; padding: 10px 14px 2px; position: relative; }
+.nq { position: absolute; left: 26px; top: 50%; transform: translateY(-42%); color: #7d7d7d; font-size: 14px; }
+.ninput { width: 100%; border: 0; border-radius: 8px; background: #2b2b2b; color: #ececec;
+  padding: 9px 12px 9px 32px; font-size: 13.5px; outline: none; }
+.ninput::placeholder { color: #7d7d7d; }
+.nbody { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 14px 14px; }
+.nbody::-webkit-scrollbar { width: 0; }
+.nsec { color: #8a8a8a; font-size: 12px; margin: 14px 0 8px; }
+.nsec:first-child { margin-top: 8px; }
+.nempty { color: #8a8a8a; font-size: 12.5px; padding: 20px 0; text-align: center; }
+.nfoot { flex: none; padding: 10px 14px; display: flex; justify-content: flex-end;
+  border-top: 1px solid #2c2c2c; }
+.nconfirm { border: 0; border-radius: 8px; background: #07c160; color: #fff;
+  padding: 9px 24px; font-size: 14px; font-weight: 600; }
+.nconfirm[disabled] { opacity: .35; cursor: not-allowed; }
+.npage .chatrow { border-radius: 10px; }
+.npage .chatrow:hover { background: #242424; }
+.npage .avrow { display: flex; gap: 14px; flex-wrap: wrap; }
+.npage .avpick { border: 0; background: transparent; display: grid; justify-items: center; gap: 6px;
+  width: 62px; padding: 0; }
+.npage .avpick .nm { font-size: 11px; color: #9a9a9a; max-width: 62px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.npage .filerow { border-radius: 10px; }
+.npage .filerow:hover { background: #242424; }
+.npage .filerow.on { background: #23331f; }
+.av { width: 38px; height: 38px; border-radius: 9px; background: #cfd8d4; color: #29352f;
+  display: grid; place-items: center; font-size: 14px; font-weight: 700; flex: none; }
+.av.sm { width: 34px; height: 34px; border-radius: 8px; font-size: 12px; background: #cfd8d4; color: #29352f; }
+.av.big { width: 46px; height: 46px; border-radius: 10px; font-size: 16px; }
+.npage .chatrow { width: 100%; border: 0; background: transparent; display: flex; align-items: center;
+  gap: 11px; padding: 10px 4px; font-size: 14px; color: #ececec; }
+.npage .filerow { width: 100%; border: 0; background: transparent; display: flex; align-items: center;
+  gap: 10px; padding: 11px 4px; border-bottom: 1px solid #262626; color: #ececec; }
+.fmain { flex: 1; min-width: 0; text-align: left; }
+.fmain b { display: block; font-size: 13.5px; color: #f0f0f0; overflow-wrap: anywhere; }
+.fmain span { font-size: 11.5px; color: #8a8a8a; }
+.badge { flex: none; font-size: 10px; font-weight: 700; color: #b9b9b9;
+  border: 1px solid #3a3a3a; border-radius: 5px; padding: 2px 5px; }
+.radio { flex: none; width: 19px; height: 19px; border-radius: 50%; border: 1.5px solid #5a5a5a; }
+.radio.on { border-color: #07c160; background: #07c160; box-shadow: inset 0 0 0 3px #191919; }
+.filerow.bad .badge { color: #e08a8a; border-color: #4a2b2b; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">WAYFINDER PROTOTYPE · 微信小程序上传流程</div>
+  <h1>小程序打卡流程：骨架已落定为「A · 分步向导」</h1>
+  <p class="lede">本页原本并列三个<strong>结构不同</strong>的流程骨架，回答「成员从打开小程序到『已记录』，中间应该被怎样分段」。<strong>2026-10-01 已选定 A。</strong>B / C 保留在底部切换条里作备查，不再作为候选。<strong>「结果未知」的新交互是待确认草案</strong>，供你直接点状态、评文案。</p>
+  <div class="decision">
+    <b>已落定的三项决策（2026-10-03 更新）</b>
+    <div class="drow"><span class="dtag ok">骨架</span><span>定为 <b>A · 分步向导</b>——把「选材料 / 确认上传 / 看结果」拆成三个互斥步骤，推进前要求勾选确认。</span></div>
+    <div class="drow"><span class="dtag ok">导入链</span><span><b>省去第 ③ 段「已选暂存页」，选完直接落子。</b>原生选择器的「确定」即最终确认，不再多一层「已选文件 1/20 + 确认导入」。</span></div>
+    <div class="drow"><span class="dtag ok">导入链</span><span><b>省去第 ① 段「空态引导页」，改为一点即弹选择器。</b>点「从微信聊天选择」直接拉起原生选择器。两项合计 → <b>本项目没有任何自建的小程序页面，只调一次 <code>chooseMessageFile</code>。</b></span></div>
+    <div class="drow"><span class="dtag ok">结果未知</span><span><b>主动作是「重交本次登记」</b>：复用同一个 <code>submission_id</code>。若服务端返回 <code>already</code>，明确说「此前已登记，本次未新增」，不把它说成又成功一次。</span></div>
+    <div class="drow"><span class="dtag warn">辅助路径</span><span>保留「去打卡榜核对」，但说明榜单最长约 60 秒才一致；它不能用「暂时没显示」证明「没有登记」。</span></div>
+  </div>
+  <div class="context">
+    <span class="pill">来源：研究 #3 · 后端复用 #4 · 产品关系 #5</span>
+    <span class="pill">约束：ADR-0005 COS 直传</span>
+    <span class="pill">图片 PNG/JPG/WebP ≤ 30MB</span>
+    <span class="pill">录音 MP3/M4A/WAV/AAC ≤ 200MB</span>
+    <span class="pill ok">已选定 · A</span>
+  </div>
+  <div class="layout">
+    <div class="panel">
+      <div id="head"></div>
+      <div class="stage"><div class="phone">
+        <div class="notch"></div>
+        <div class="navbar">
+          <span class="ico back off" id="back">‹</span>
+          <span class="cap" id="captitle">戒色打卡</span>
+          <span class="ico">⋯</span>
+        </div>
+        <div class="screenwrap" id="screen"></div>
+      </div></div>
+    </div>
+    <div class="notes" id="notes"></div>
+  </div>
+</div>
+
+<div id="switcher" style="position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:99;
+  display:flex;align-items:center;gap:12px;background:#17211e;color:#fff;border-radius:999px;
+  padding:8px 12px;box-shadow:0 12px 34px rgba(23,33,30,.34)">
+  <button id="prev" title="上一个变体（←）" style="width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:15px">‹</button>
+  <span id="label" style="font-size:12.5px;letter-spacing:.03em;min-width:236px;text-align:center"></span>
+  <button id="next" title="下一个变体（→）" style="width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:15px">›</button>
+  <button id="resetall" title="重置当前变体" style="border:0;background:rgba(255,255,255,.14);color:#fff;border-radius:999px;padding:6px 12px;font-size:12px">重来</button>
+</div>
+
+<script>
+/*=========================== 共享演示素材与校验规则 ============================*/
+/* 素材按「聊天 → 该聊天的文件」两级组织，对应真机录屏里观察到的选择器。
+   真机流程（已核对）：+ → 来源菜单「微信文件」 → 导入微信文件 → 「选择一个聊天」
+   → 该聊天的文件列表（按月分组、圆形单选） → 确定。
+   注意：真机上这一层是否由官方 chooseMessageFile 提供，还是 ima 自建，仍待真机验证（研究 #3）。 */
+const CHATS = [
+  { key: 'assistant', name: '文件传输助手', av: '助', recent: '最近转发' },
+  { key: 'group',     name: '戒色打卡群',   av: '群', recent: '最近聊天' },
+  { key: 'zhang',     name: '张恒',         av: '张', recent: '最近聊天' },
+];
+const KIT = [
+  /* —— 文件传输助手：运动截图 —— */
+  { key: 'img-ok',    kind: 'image', chat: 'assistant', from: '文件传输助手', month: '这个月', date: '09-30 07:12',
+    name: '运动时长截图.jpg',   bytes: 2.4 * 1024 * 1024,  ok: true },
+  { key: 'img-done',  kind: 'image', chat: 'assistant', from: '文件传输助手', month: '这个月', date: '09-29 06:58',
+    name: '跑步记录截图.png',   bytes: 1.1 * 1024 * 1024,  ok: true },
+  { key: 'img-type',  kind: 'image', chat: 'assistant', from: '文件传输助手', month: '这个月', date: '09-28 21:04',
+    name: '运动记录.pdf',       bytes: 0.8 * 1024 * 1024,  ok: false, reason: 'type' },
+  { key: 'img-big',   kind: 'image', chat: 'assistant', from: '文件传输助手', month: '2026/8',  date: '08-31 22:40',
+    name: '屏幕录制截图.png',   bytes: 41 * 1024 * 1024,   ok: false, reason: 'size' },
+  /* —— 戒色打卡群：阅读录音 —— */
+  { key: 'aud-ok',    kind: 'audio', chat: 'group', from: '阿明', month: '这个月', date: '09-30 06:20',
+    name: '朗读戒色文章.m4a',   bytes: 18.6 * 1024 * 1024, ok: true },
+  { key: 'aud-doc',   kind: 'audio', chat: 'group', from: '阿明', month: '这个月', date: '09-29 22:15',
+    name: '第3章朗读.wav',      bytes: 26.2 * 1024 * 1024, ok: true },
+  { key: 'aud-type',  kind: 'audio', chat: 'group', from: '阿明', month: '这个月', date: '09-28 20:31',
+    name: '微信语音消息.amr',   bytes: 0.3 * 1024 * 1024,  ok: false, reason: 'voice' },
+  { key: 'aud-big',   kind: 'audio', chat: 'zhang', from: '张恒', month: '这个月', date: '09-27 19:02',
+    name: '今天上午的录音.wav', bytes: 236 * 1024 * 1024,  ok: false, reason: 'size' },
+];
+const KINDS = {
+  image: { label: '运动时长截图', icon: '▧', exts: 'PNG / JPG / WebP', maxText: '30MB', badge: 'JPG' },
+  audio: { label: '阅读录音', icon: '♪', exts: 'MP3 / M4A / WAV / AAC', maxText: '200MB', badge: 'M4A' },
+};
+const SRC = { image: '微信聊天 · 文件传输助手', audio: '微信聊天 · 戒色打卡群' };
+function chatOf(key) { return CHATS.find(c => c.key === key); }
+function msgFor(kind, reason, bytes) {
+  const K = KINDS[kind];
+  if (reason === 'type')  return `${K.label}只支持 ${K.exts}，这份文件的格式不符，已退回。`;
+  if (reason === 'size')  return `${K.label}上限 ${K.maxText}，这份文件是 ${fmtSize(bytes)}，超出上限，已退回。`;
+  return '不支持微信语音消息。语音消息不是文件，请让对方以「文件」发送后再选。';
+}
+function fmtSize(b) {
+  return b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + ' MB' : (b / 1024).toFixed(0) + ' KB';
+}
+function pick(list, kind, key) { return list.find(f => f.kind === kind && f.key === key); }
+/* 把演示素材转成附件状态；客户端只做预检，服务端 prepare 会再校验一次 */
+function toAttachment(kit) {
+  const base = { name: kit.name, size: kit.bytes, text: fmtSize(kit.bytes), source: kit.source || SRC[kit.kind] || '', meta: kit };
+  if (kit.ok) return { ...base, status: 'selected', reason: null, message: null };
+  return { ...base, status: kit.reason === 'size' ? 'too_large' : 'invalid_type',
+           reason: kit.reason, message: msgFor(kit.kind, kit.reason, kit.bytes) };
+}
+/* 槽位的稳定选择器，供原型自检用（也便于将来写 e2e） */
+function slotId(kind) { return `slot-${kind}`; }
+function emptyA() { return { status: 'empty', name: null, size: 0, text: '', source: '', reason: null, message: null, meta: null }; }
+function chipOf(st) {
+  return { empty: '未选择', selecting: '选择中', selected: '已就绪', invalid_type: '格式不符',
+           too_large: '超出上限', cancelled: '已取消', read_failed: '文件失效' }[st] || st;
+}
+const TODAY = '2026-09-30', NICK = '小明';
+const UNKNOWN_NET = '网络中断，没收到 finalize 的回执。服务端可能已经登记，也可能没有。';
+const UNKNOWN_REG = '材料已上传，但登记回执丢失。服务端可能已经写入，也可能没有。';
+
+/*=========================== 共享：微信文件导入链（一次调用 · 已定稿） ============================*/
+/* 三个变体共用。它回答的是「文件从哪来」，与 A/B/C 的骨架问题正交。
+   真机（ima 客户端）是「三段夹心」——两头白底页是 ima **自建的小程序页**，中间深色页是**系统原生选择器**：
+     ① 空态引导页「暂无任何文件，点击开始上传」            ← **2026-10-01 拍板省去**
+     ② 原生选择器：选聊天 → 该聊天的文件列表 → 确定        ← **官方能力，一次调用即得**
+     ③ 已选暂存页「已选文件 1/20 + 继续添加 + 确认导入」   ← **2026-10-01 拍板省去**
+   拍板结论：**① ③ 都省去 → 点「从微信聊天选择」直接弹原生选择器，「确定」即落子。**
+   于是本项目**没有任何自建的小程序页面**，只调一次 `wx.chooseMessageFile()`。
+   代价与收益见研究 #3 实现约束第 3 条；提示语（录音须由对方以文件发送）改由打卡表单自己承载。
+   证据：用户两段真机录屏（2026-09-30）+ 归属联网取证（研究 #3 §3）。
+   注：真机第 2 段「使用以下方式打开」系统面板只在「从别的 App 唤起微信」时出现，
+   我们的小程序内部调用不会经过它，故原型不画（研究 #3 实现约束第 9 条）。 */
+const Picker = {
+  kind: null, host: null, stage: 'closed', level: 'chat', chat: null, sel: [], q: '',
+  /* ① 已省：点入口直接进原生选择器，没有中间的小程序页。 */
+  open(kind, host) {
+    this.kind = kind; this.host = host;             // host: 'A' | 'B' | 'C'
+    this.stage = 'picker'; this.level = 'chat'; this.chat = null; this.sel = []; this.q = '';
+    render(); return this;
+  },
+  close() { const h = this.host; this.kind = null; this.host = null; this.stage = 'closed';
+    this.level = 'chat'; this.chat = null; this.sel = []; this.q = ''; return h; },
+  /* 选择一个聊天 */
+  pickChat(chatKey) { this.chat = chatKey; this.level = 'files'; this.sel = []; render(); return this; },
+  /* 勾选该聊天里的一个文件（真机是圆形单选，业务只取 1 份） */
+  select(fileKey) { this.sel = this.sel[0] === fileKey ? [] : [fileKey]; render(); return this; },
+  /* 原生选择器的「取消 / 退出」：没有小程序页可回，直接放弃本次导入 → 槽位转「已取消」。
+     这对应真机上 chooseMessageFile 的 fail 回调（用户取消）。 */
+  nativeCancel() { this.abort(); },
+  /* 「‹」：文件列表层退回聊天列表；已在聊天列表层则等同退出。 */
+  nativeBack() {
+    if (this.level === 'files') { this.level = 'chat'; this.chat = null; this.sel = []; render(); }
+    else this.abort();
+    return this;
+  },
+  /* 「确定」就是最终确认，直接落子回主流程（① ③ 两段小程序页均已省去）。
+     必须先取出 host / kind / sel 再 close()——close() 会把它们清空。 */
+  nativeConfirm() {
+    if (!this.sel.length) return;
+    const h = this.host, k = this.kind, key = this.sel[0];
+    this.close();
+    VARIANTS[h].setFile(k, key);
+  },
+  /* 放弃整个导入——等价于「用户取消」，不是错误。选择器已关时是空操作。 */
+  abort() {
+    const h = this.host, k = this.kind;
+    if (!h) return this;
+    this.close();
+    VARIANTS[h].cancel(k);
+    return this;
+  },
+  files() { return KIT.filter(f => f.kind === this.kind && f.chat === this.chat); },
+  chats() { const q = this.q.trim(); return q ? CHATS.filter(c => c.name.includes(q)) : CHATS; },
+  title() { return this.stage === 'closed' ? '' : '选择一个聊天'; },
+
+  view() {
+    if (this.stage === 'closed' || !this.kind) return '';
+
+    /* 原生选择器（唯一的中间态） */
+    if (this.stage === 'picker') {
+      if (this.level === 'chat') {
+        const recent = CHATS.filter(c => c.recent === '最近转发');
+        const rest = this.chats().filter(c => c.recent === '最近聊天');
+        const avrow = recent.map(c => `<button class="avpick" onclick="Picker.pickChat('${c.key}')">
+          <span class="av big">${c.av}</span><span class="nm">${c.name}</span></button>`).join('');
+        const rows = rest.map(c => `<button class="chatrow" onclick="Picker.pickChat('${c.key}')">
+          <span class="av">${c.av}</span><span style="flex:1;text-align:left">${c.name}</span><span class="meta">›</span></button>`).join('');
+        return `<div class="nmask"><div class="npage">
+          <div class="nnav"><span class="nico" onclick="Picker.nativeCancel()">‹</span><b>选择一个聊天</b><span class="nico"></span></div>
+          <div class="nsearch"><span class="nq">⌕</span><input id="pq" class="ninput" placeholder="搜索"
+            value="${this.q}" oninput="Picker.q=this.value;render()" /></div>
+          <div class="nbody">
+            ${recent.length ? `<div class="nsec">最近转发</div><div class="avrow">${avrow}</div>` : ''}
+            <div class="nsec">最近聊天</div>
+            ${rows || `<div class="nempty">没有匹配「${this.q}」的聊天。</div>`}
+          </div>
+        </div></div>`;
+      }
+      /* ②b 文件列表 */
+      const chat = chatOf(this.chat);
+      const months = [...new Set(this.files().map(f => f.month))];
+      const groups = months.map(m => {
+        const items = this.files().filter(f => f.month === m).map(f => {
+          const on = this.sel[0] === f.key;
+          const bad = !f.ok;
+          return `<button class="filerow ${on ? 'on' : ''} ${bad ? 'bad' : ''}" onclick="Picker.select('${f.key}')">
+            <span class="av sm">${chat.av}</span>
+            <span class="fmain"><b>${f.name}</b><span>${f.from} · ${f.date} · ${fmtSize(f.bytes)}${bad ? ' · 会被拦下' : ''}</span></span>
+            <span class="badge">${f.name.split('.').pop().toUpperCase().slice(0, 4)}</span>
+            <span class="radio ${on ? 'on' : ''}"></span></button>`;
+        }).join('');
+        return `<div class="nsec">${m}</div>${items}`;
+      }).join('');
+      return `<div class="nmask"><div class="npage">
+        <div class="nnav"><span class="nico" onclick="Picker.nativeBack()">‹</span><b>${chat.name}</b>
+          <span class="nico txt" onclick="Picker.nativeCancel()">取消</span></div>
+        <div class="nbody">${groups || `<div class="nempty">这个聊天里没有可选的文件。</div>`}</div>
+        <div class="nfoot"><button class="nconfirm" ${this.sel.length ? '' : 'disabled'}
+          onclick="Picker.nativeConfirm()">确定</button></div>
+      </div></div>`;
+    }
+
+    /* ① 与 ③ 两个 ima 自建的小程序页都已于 2026-10-01 拍板省去，
+       所以到这里就没有别的中间态了：本项目一次 chooseMessageFile 调用即完成取值。
+       若日后要恢复任一段，形态见 git 历史（本文件 v4 / v5）。 */
+    return '';
+  }
+};
+
+/*=========================== A · 分步向导 ============================*/
+/* 三个互斥步骤：选材料 → 确认上传 → 登记结果；推进前要求勾选确认。 */
+const A = {
+  key: 'A', name: '分步向导',
+  blurb: '把「选材料 / 确认上传 / 看结果」拆成三个互斥步骤，推进前要求勾选确认。',
+  steps: ['选材料', '确认上传', '登记结果'],
+  state: null,
+  fresh() { return { step: 1, image: emptyA(), audio: emptyA(), reflection: '', approvedUp: false, approvedRetry: false,
+    phase: 'ready', pct: 0, activeStage: 0, stageError: null, unknown: null, checkViewed: false,
+    confirmingRetry: false, isResubmission: false, resultStatus: null, resubmitOutcome: 'already', attempts: 0, timer: null }; },
+  setFile(kind, kitKey) {
+    const kit = pick(KIT, kind, kitKey); if (!kit) return;
+    const chat = chatOf(kit.chat);
+    this.state[kind] = toAttachment({ ...kit, source: `微信聊天 · ${chat.name}` });
+    if (this.state[kind].status === 'selected') this.state.approvedUp = false;
+    render();
+  },
+  cancel(kind) { this.state[kind] = { ...emptyA(), status: 'cancelled', message: '你取消了选择，这一项保持未选择，另一项不受影响。' }; render(); },
+  invalidate(kind) {
+    const cur = this.state[kind];
+    if (cur.status !== 'selected') return;
+    this.state[kind] = { ...cur, status: 'read_failed', reason: 'read_failed',
+      message: '这个临时文件已经失效（小程序重启或页面被销毁）。请重新选择，不尝试恢复旧路径。' };
+    render();
+  },
+  ready() { return this.state.image.status === 'selected' && this.state.audio.status === 'selected'; },
+  /* 勾选确认只翻一个标志位，就地更新按钮，不整屏重渲染——否则正在输入的感悟会丢焦点。
+     这也是「按钮可用性」的关键路径，必须同步。 */
+  toggleUp() { this.state.approvedUp = !this.state.approvedUp; syncGate(); },
+  toggleRetry() { this.state.approvedRetry = !this.state.approvedRetry; syncGate(); },
+  beginResubmit() {
+    const s = this.state;
+    if (s.phase !== 'unknown') return;
+    s.confirmingRetry = true; s.approvedRetry = false; s.checkViewed = false; render();
+  },
+  cancelResubmit() {
+    const s = this.state;
+    s.confirmingRetry = false; s.approvedRetry = false; render();
+  },
+  openCheck() { this.state.checkViewed = true; render(); },
+  closeCheck() { this.state.checkViewed = false; render(); },
+  setResubmitOutcome(outcome) {
+    if (!['already', 'new', 'fail'].includes(outcome)) return;
+    this.state.resubmitOutcome = outcome; render();
+  },
+  submit() {
+    const s = this.state;
+    if (!this.ready() || s.phase === 'uploading') return;
+    const sameSubmission = s.phase === 'unknown' || (s.phase === 'failed' && s.isResubmission);
+    if (sameSubmission && (!s.confirmingRetry || !s.approvedRetry)) return;
+    if (!sameSubmission && s.attempts > 0 && !s.approvedRetry) return; // 明确失败后的整单重试闸门
+    s.isResubmission = sameSubmission || s.isResubmission;
+    s.attempts += 1; s.approvedRetry = false; s.confirmingRetry = false; s.checkViewed = false;
+    s.step = 2; s.phase = 'uploading'; s.pct = 0; s.activeStage = 0; s.stageError = null; s.unknown = null; s.resultStatus = null;
+    render();                                             // 先落一次 uploading，进度屏才会立刻出现
+    this.tick();
+  },
+  tick() {
+    const s = this.state;
+    if (s.timer) clearInterval(s.timer);
+    let p = 0;
+    const total = 4;                                     // prepare / PUT图 / PUT音 / finalize
+    s.timer = setInterval(() => {
+      p += 9;
+      if (p >= 100) {
+        clearInterval(s.timer); s.timer = null;
+        if (s.activeStage === total - 1) {
+          s.pct = 100;
+          if (s.isResubmission && s.resubmitOutcome === 'fail') {
+            s.phase = 'failed'; s.step = 2; s.activeStage = 3;
+            s.stageError = '这次重交没有拿到成功回执。可以再次重交本次登记；如果刚才其实已经成功，服务端会返回「此前已登记」，不会新增一天。';
+          } else {
+            s.phase = 'success'; s.step = 3; s.resultStatus = s.isResubmission ? s.resubmitOutcome : 'new';
+          }
+          render(); return;
+        }
+        s.activeStage += 1; s.pct = Math.round((s.activeStage / total) * 100); render(); A.tick(); return;
+      }
+      s.pct = Math.round(((s.activeStage + p / 100) / total) * 100); render();
+    }, 95);
+  },
+  failAt(stage) {
+    const s = this.state;
+    if (s.timer) { clearInterval(s.timer); s.timer = null; }
+    s.step = 2; s.phase = 'failed'; s.activeStage = stage; s.pct = Math.round((stage / 4) * 100);
+    s.stageError = stage === 3
+      ? (s.isResubmission ? '这次重交没有拿到成功回执。可以再次重交本次登记；如果刚才其实已经成功，服务端会返回「此前已登记」，不会新增一天。' : '登记失败：材料已上传，但服务端没有写入记录。')
+      : '上传中断：一旦中断，整单需要重新上传。';
+    render();
+  },
+  unknownCase(which) {
+    const s = this.state;
+    if (s.timer) { clearInterval(s.timer); s.timer = null; }
+    s.step = 3; s.phase = 'unknown'; s.activeStage = 4; s.pct = 100;
+    s.unknown = which === 'reg' ? UNKNOWN_REG : UNKNOWN_NET;
+    s.checkViewed = false; s.confirmingRetry = false; s.approvedRetry = false; s.isResubmission = false; s.resultStatus = null; s.resubmitOutcome = 'already';
+    render();
+  },
+  reset() { if (this.state && this.state.timer) clearInterval(this.state.timer); this.state = this.fresh(); },
+  view() {
+    const s = this.state;
+    let r = `<div class="rails">${this.steps.map((_, i) => `<i class="${i + 1 < s.step ? 'on' : i + 1 === s.step ? 'now' : ''}"></i>`).join('')}</div>`;
+    if (s.phase === 'success') r += this.done();
+    else if (s.phase === 'uploading') r += this.uploading();
+    else if (s.phase === 'failed') r += this.failed();
+    else if (s.phase === 'unknown') r += this.unknown();
+    else r += this.step1();
+    return r;
+  },
+  step1() {
+    const s = this.state;
+    const slot = (kind) => {
+      const att = s[kind], K = KINDS[kind];
+      const bad = ['invalid_type', 'too_large', 'read_failed'].includes(att.status);
+      const cls = att.status === 'selected' ? 'slot filled' : bad ? 'slot bad' : 'slot';
+      return `<div class="${cls}" id="${slotId(kind)}">
+        <div class="kind">
+          <div class="ico ${kind === 'audio' ? 'aud' : ''}">${K.icon}</div>
+          <div class="txt"><b>${K.label}</b><span>${att.status === 'selected' || bad ? att.name : `${K.exts} · ≤ ${K.maxText}`}</span></div>
+          <span class="chip ${att.status === 'selected' ? 'on' : bad ? 'bad' : ''}">${chipOf(att.status)}</span>
+        </div>
+        ${att.status === 'selected' ? `<div class="note">${att.text} · 来源：${att.source}</div>` : ''}
+        ${bad ? `<div class="msgbox bad">${att.message}</div>` : ''}
+        ${att.status === 'cancelled' ? `<div class="msgbox info">${att.message}</div>` : ''}
+        <div class="chips">
+          <button class="chip" onclick="Picker.open('${kind}','A')">从微信聊天选择</button>
+          <button class="chip" onclick="A.setFile('${kind}','${kind === 'image' ? 'img-big' : 'aud-big'}')">演示：选中一个超限文件</button>
+          <button class="chip" onclick="A.setFile('${kind}','${kind === 'image' ? 'img-type' : 'aud-type'}')">演示：选中一个格式不符</button>
+          ${(att.status === 'selected' || bad) ? `<button class="chip" onclick="A.invalidate('${kind}')">演示：临时文件失效</button>` : ''}
+        </div>
+      </div>`;
+    };
+    const missing = [s.image.status !== 'selected' ? '运动截图' : '', s.audio.status !== 'selected' ? '阅读录音' : ''].filter(Boolean);
+    return `<div class="body">
+      <div class="stephead"><span class="n">STEP 1 / 3</span></div>
+      <h2 class="t">选择今天的材料</h2>
+      <p class="sub">两个入口都从微信聊天里取文件，互不影响。录音须由对方以「文件」发送——微信语音消息不能选。</p>
+      ${slot('image')}${slot('audio')}
+      <div class="field"><label>今日感悟（选填，最多 2000 字）</label>
+        <textarea class="input" id="reflect" placeholder="今天想对自己说的话……" oninput="A.state.reflection=this.value">${s.reflection}</textarea></div>
+      <div class="gate approve">
+        <div class="tick ${s.approvedUp ? 'on' : ''}" id="tick-up" onclick="A.toggleUp()">
+          <span class="box">✓</span><span>我确认这两份材料就是要提交的（服务端 prepare 会再校验一次）。</span></div>
+        <div style="height:10px"></div>
+        <button class="btn primary block" id="go-submit" ${this.ready() && s.approvedUp ? '' : 'disabled'} onclick="A.submit()">下一步：上传并登记</button>
+        ${missing.length ? `<div class="msgbox info" style="margin-top:9px">还没就绪：${missing.join('、')}需要先选中。</div>` : ''}
+      </div>
+    </div>`;
+  },
+  uploading() {
+    const s = this.state;
+    const labels = ['prepare：校验并下发一次性凭证', 'COS PUT：上传运动截图', 'COS PUT：上传阅读录音', 'finalize：登记笔记与统计'];
+    const lines = labels.map((l, i) => {
+      const done = i < s.activeStage, active = i === s.activeStage && s.phase === 'uploading';
+      return `<div class="statusline ${done ? 'done' : active ? 'active' : ''}">${done ? '<span class="okmark">✓</span>' : active ? '<span class="spinner"></span>' : '<span class="dot"></span>'}<b>${l}</b></div>`;
+    }).join('');
+    return `<div class="body">
+      <div class="stephead"><span class="n">STEP 2 / 3</span></div>
+      <h2 class="t">正在上传并登记</h2>
+      <p class="sub">提交按钮已锁定。请保持页面打开，直到出现明确结果。</p>
+      <div class="card">
+        <div class="progress"><i style="width:${s.pct}%"></i></div>
+        <div class="counter" style="margin-top:5px">${s.pct}%</div>
+        <div style="height:12px"></div>${lines}
+      </div>
+      <div class="msgbox info">上传完成不等于打卡成功，必须等到 finalize 的明确成功响应。</div>
+      <div class="msgbox info">演示：<button class="chip" onclick="A.failAt(1)">上传中断</button> <button class="chip" onclick="A.failAt(3)">登记失败</button> <button class="chip" onclick="A.unknownCase('reg')">结果未知</button></div>
+    </div>`;
+  },
+  failed() {
+    const s = this.state;
+    const sameSubmission = s.isResubmission;
+    const labels = ['prepare：校验并下发一次性凭证', 'COS PUT：上传运动截图', 'COS PUT：上传阅读录音', 'finalize：登记笔记与统计'];
+    const lines = labels.map((l, i) => `<div class="statusline ${i < s.activeStage ? 'done' : ''}">${i < s.activeStage ? '<span class="okmark">✓</span>' : '<span class="dot"></span>'}<b>${l}</b></div>`).join('');
+    return `<div class="body">
+      <div class="stephead"><span class="n">STEP 2 / 3</span></div>
+      <h2 class="t">${sameSubmission ? '重交本次未完成' : '提交中断'}</h2>
+      <p class="sub">${sameSubmission ? '这次仍使用同一个提交标识；可以再次重交，不会因为多点一次就多记一天。' : '材料仍保留在本次会话里。重试会重新 prepare，不复用过期凭证。'}</p>
+      <div class="card err"><div style="font-size:12.5px">${s.stageError}</div></div>
+      <div class="card">${lines}</div>
+      <div class="approve">
+        <div class="tick ${s.approvedRetry ? 'on' : ''}" id="tick-retry" onclick="A.toggleRetry()">
+          <span class="box">✓</span><span>我确认${sameSubmission ? `再次重交本次登记（这是第 ${s.attempts + 1} 次请求）。` : `重新提交整单（这将是第 ${s.attempts + 1} 次提交）。`}</span></div>
+      </div>
+      <button class="btn primary block" id="go-submit" ${s.approvedRetry ? '' : 'disabled'} onclick="A.submit()">${sameSubmission ? '再次重交本次登记' : '重试上传'}</button>
+      <div class="msgbox info">${sameSubmission ? '每次手动重交都复用同一个 submission_id；如果之前其实已经完成，服务端会返回「此前已登记」。' : '重试可能留下 COS 孤儿对象，由 ima 侧生命周期回收；长期凭证不会下发到客户端。'}</div>
+    </div>`;
+  },
+  unknown() {
+    const s = this.state;
+    const check = s.checkViewed
+      ? `<div class="msgbox info"><b>榜单核对说明</b><br>榜单使用最终一致列表，最长约 60 秒才显示新记录；暂时没看到今天的记录，不代表没有登记。核对后这一页仍保留本次提交。<button class="btn ghost block" style="margin-top:9px" onclick="A.closeCheck()">返回结果页</button></div>`
+      : `<button class="btn ghost block" onclick="A.openCheck()">去打卡榜核对</button>`;
+    const retry = s.confirmingRetry
+      ? `<div class="approve">
+          <div class="tick ${s.approvedRetry ? 'on' : ''}" id="tick-unknown-retry" onclick="A.toggleRetry()">
+            <span class="box">✓</span><span>我知道这是同一次登记；如果它已经成功，本次只会补回执，不会新增一天。</span></div>
+          <button class="btn primary block" id="go-resubmit" ${s.approvedRetry ? '' : 'disabled'} onclick="A.submit()">确认并重交本次登记</button>
+          <button class="btn ghost block" onclick="A.cancelResubmit()">先不重交</button>
+        </div>`
+      : `<button class="btn primary block" onclick="A.beginResubmit()">重交本次登记</button>`;
+    return `<div class="body">
+      <div class="stephead"><span class="n">STEP 3 / 3 · 结果待确认</span></div>
+      <h2 class="t">这次登记结果还没收到</h2>
+      <p class="sub">两份材料已经上传；只是 finalize 的回执在路上丢了。建议先重交本次登记，不用重新选材料。</p>
+      <div class="msgbox warn"><b>可能已经登记</b><br>${s.unknown}</div>
+      <div class="routegrid">
+        <div class="routecard main">
+          <div class="routeeyebrow">建议 · 安全重交</div>
+          <h3>重交本次登记</h3>
+          <p>继续使用同一个 <code>submission_id</code>。如果刚才其实已经成功，服务端只会返回原结果，不会再新增一天。</p>
+          ${retry}
+          <div class="chips" style="margin-top:9px">
+            <button class="chip ${s.resubmitOutcome === 'already' ? 'on' : ''}" onclick="A.setResubmitOutcome('already')">演示：返回 already</button>
+            <button class="chip ${s.resubmitOutcome === 'new' ? 'on' : ''}" onclick="A.setResubmitOutcome('new')">演示：返回 new</button>
+            <button class="chip ${s.resubmitOutcome === 'fail' ? 'bad' : ''}" onclick="A.setResubmitOutcome('fail')">演示：再次失败</button>
+          </div>
+        </div>
+        <div class="routecard secondary">
+          <div class="routeeyebrow">辅助核对</div>
+          <h3>去打卡榜核对</h3>
+          <p>可以先看榜单；但列表最长约 60 秒才一致，「暂时没显示」不能证明「没有登记」。</p>
+          ${check}
+        </div>
+      </div>
+      <div class="msgbox info"><b>同一天再登记（候选文案）</b><br>「今天已有一条打卡。按你的选择，今天也可以再登记一条。」prepare 在上传前发现时先问；finalize 若发现状态刚变化，再问一次。两处时机不同、措辞一致；prepare 已确认时不重复询问。</div>
+    </div>`;
+  },
+  done() {
+    const s = this.state;
+    const already = s.resultStatus === 'already';
+    return `<div class="body">
+      <div class="stephead"><span class="n">STEP 3 / 3</span></div>
+      <div class="bigocheck">${already ? '↻' : '✓'}</div>
+      <h2 class="t center">${already ? '已确认登记' : '打卡成功'}</h2>
+      <p class="sub center">${already ? '刚才那次其实已经登记成功。本次重交只补回执，没有新增一天。' : '截图、录音和感悟都已写入，今天的记录已生成。'}</p>
+      <div class="center"><span class="datechip">${NICK} · ${TODAY} ${already ? '已登记 · 本次未新增' : '已记录'}</span></div>
+      <div class="card"><div class="kv">
+        <b>本次结果</b><span><span class="resulttag">${already ? 'already · 此前已登记' : 'new · 本次新登记'}</span></span>
+        <b>截图</b><span>${s.image.name}</span><b>录音</b><span>${s.audio.name}</span>
+        <b>感悟</b><span>${s.reflection ? '已填写' : '未填写'}</span>
+      </div></div>
+      <button class="btn ghost block" onclick="A.reset();render()">返回打卡页</button>
+    </div>`;
+  },
+  notes() {
+    return [
+      { h: '这个变体的结构', items: ['三个互斥步骤，一次只推进一件事。', '结果未知时主动作是重交本次；榜单核对保留为辅助。', 'already 与 new 的结果文案明确区分。'] },
+      { h: '试着点这些', items: ['两项就绪后勾选并开始，再模拟「结果未知」。', '点榜单核对看 60 秒延迟说明，再返回结果页。', '重交前勾选确认，分别演示 already / new / 再次失败。', '再次失败后仍可手动再交本次，每次复用原提交并再次确认。'] },
+      { h: '候选方案（待确认）', items: ['prepare 提前确认与 finalize 权威闸门分开触发，但用同一套温和措辞；prepare 已确认则不重复问。', 'already 写成「此前已登记，本次未新增」；new 写成「本次新登记」。', '再次失败后继续留在同一次提交，允许手动重试，不自动重试。'] },
+      { h: '后续要盯的点', items: ['「重交同一次」和「今天再登记一条」是否足够容易区分。', '「推进前确认」加「重交前确认」是否显得啰嗦。'] },
+    ];
+  }
+};
+
+/*=========================== B · 单屏画布 ============================*/
+/* 不分步：一屏放齐材料与感悟，底部常驻提交条；来源选择收进底部弹层。 */
+const B = {
+  key: 'B', name: '单屏画布',
+  blurb: '不分步，一屏放齐材料与感悟，底部常驻提交条；来源选择收进底部弹层。',
+  state: null,
+  fresh() { return { image: emptyA(), audio: emptyA(), reflection: '', phase: 'ready', pct: 0,
+    activeStage: 0, stageError: null, unknown: null, attempts: 0, timer: null }; },
+  openModal(kind) { Picker.open(kind, 'B'); },
+  setFile(kind, kitKey) {
+    const kit = pick(KIT, kind, kitKey); if (!kit) return;
+    const chat = chatOf(kit.chat);
+    this.state[kind] = toAttachment({ ...kit, source: `微信聊天 · ${chat.name}` });
+    this.state.stageError = null; render();
+  },
+  cancel(kind) { this.state[kind] = { ...emptyA(), status: 'cancelled', message: '你取消了选择，这一项保持未选择，另一项不受影响。' }; render(); },
+  clear(kind) { this.state[kind] = emptyA(); render(); },
+  ready() { return this.state.image.status === 'selected' && this.state.audio.status === 'selected'; },
+  submit() {
+    const s = this.state;
+    if (!this.ready() || s.phase === 'uploading') return;
+    s.attempts += 1; s.phase = 'uploading'; s.pct = 0; s.activeStage = 0; s.stageError = null; s.unknown = null;
+    render();                                             // 先落一次 uploading，进度卡片才会立刻出现
+    this.tick();
+  },
+  tick() {
+    const s = this.state;
+    if (s.timer) clearInterval(s.timer);
+    let p = 0, total = 3;                                 // prepare / PUT / finalize
+    s.timer = setInterval(() => {
+      p += 10;
+      if (p >= 100) {
+        clearInterval(s.timer); s.timer = null;
+        if (s.activeStage === total - 1) { s.phase = 'success'; s.pct = 100; render(); return; }
+        s.activeStage += 1; s.pct = Math.round((s.activeStage / total) * 100); render(); B.tick(); return;
+      }
+      s.pct = Math.round(((s.activeStage + p / 100) / total) * 100); render();
+    }, 95);
+  },
+  failAt(stage) {
+    const s = this.state;
+    if (s.timer) { clearInterval(s.timer); s.timer = null; }
+    s.phase = 'failed'; s.activeStage = stage; s.pct = Math.round((stage / 3) * 100);
+    s.stageError = stage === 2 ? '登记失败：材料已上传，但没有写入记录。' : '上传中断：一整单需要重新上传。'; render();
+  },
+  unknownCase(which) {
+    const s = this.state;
+    if (s.timer) { clearInterval(s.timer); s.timer = null; }
+    s.phase = 'unknown'; s.activeStage = 3; s.pct = 100;
+    s.unknown = which === 'reg' ? UNKNOWN_REG : UNKNOWN_NET; render();
+  },
+  reset() { if (this.state && this.state.timer) clearInterval(this.state.timer); this.state = this.fresh(); },
+  view() {
+    const s = this.state;
+    if (s.phase === 'success') return this.done();
+    const pend = (kind) => {
+      const att = s[kind], K = KINDS[kind];
+      const bad = ['invalid_type', 'too_large', 'read_failed'].includes(att.status);
+      const cls = att.status === 'selected' ? 'pending ok' : bad ? 'pending bad' : 'pending';
+      const sub = att.status === 'selected' ? `${att.text} · ${att.source}` : bad ? att.message : att.status === 'cancelled' ? att.message : `${K.exts} · ≤ ${K.maxText}`;
+      return `<div class="${cls}">
+        <div class="pico">${att.status === 'selected' ? '✓' : K.icon}</div>
+        <div style="min-width:0"><b style="font-size:12.5px;display:block">${att.status === 'selected' || bad ? att.name : K.label}</b><span style="font-size:11.5px">${sub}</span></div>
+        ${(att.status === 'selected' || bad) ? `<span class="x" onclick="B.clear('${kind}')">✕</span>` : ''}
+      </div>`;
+    };
+    return `<div class="body">
+      <div class="row between"><h2 class="t">今日打卡</h2><span class="meta">${NICK} · ${TODAY}</span></div>
+      <p class="sub">材料从微信聊天里取。选完一份就回到这里，另一份可以接着选。</p>
+      <button class="dropbig" onclick="B.openModal('image')"><b>＋ 选择运动时长截图</b><span>小程序从会话里取图片 · PNG / JPG / WebP · ≤ 30MB</span></button>
+      ${pend('image')}
+      <button class="dropbig small" onclick="B.openModal('audio')"><b>＋ 选择阅读录音</b><span>取聊天里「作为文件发送」的 MP3 / M4A / WAV / AAC · ≤ 200MB</span></button>
+      ${pend('audio')}
+      <div class="field"><label>今日感悟（选填）</label>
+        <textarea class="input" placeholder="今天想对自己说的话……" oninput="B.state.reflection=this.value">${s.reflection}</textarea></div>
+      ${s.phase === 'ready' ? '' : this.statusCard()}
+      <div class="msgbox info">上传完成不等于打卡成功，要等 finalize 的明确成功响应。</div>
+    </div>
+    <div class="stickyfoot">
+      <button class="btn primary block" ${this.ready() && s.phase !== 'uploading' ? '' : 'disabled'} onclick="B.submit()">${s.phase === 'failed' ? '重新提交整单' : '提交打卡'}</button>
+      <div class="meta center">${this.ready() ? '两份材料已就绪' : '两个材料都选好才能提交'} · 已提交 ${s.attempts} 次</div>
+    </div>`;
+  },
+  statusCard() {
+    const s = this.state;
+    const labels = ['prepare：校验并下发一次性凭证', 'COS PUT：两路并行上传', 'finalize：登记笔记与统计'];
+    const lines = labels.map((l, i) => {
+      const done = i < s.activeStage, active = i === s.activeStage && s.phase === 'uploading';
+      return `<div class="statusline ${done ? 'done' : active ? 'active' : ''}">${done ? '<span class="okmark">✓</span>' : active ? '<span class="spinner"></span>' : '<span class="dot"></span>'}<b>${l}</b></div>`;
+    }).join('');
+    if (s.phase === 'uploading') return `<div class="card"><div class="progress"><i style="width:${s.pct}%"></i></div>
+      <div class="counter" style="margin-top:5px">${s.pct}%</div><div style="height:12px"></div>${lines}
+      <div style="height:10px"></div>
+      <div class="msgbox info">演示：<button class="chip" onclick="B.failAt(1)">上传中断</button> <button class="chip" onclick="B.failAt(2)">登记失败</button> <button class="chip" onclick="B.unknownCase('reg')">结果未知</button></div></div>`;
+    if (s.phase === 'failed') return `<div class="card err"><div style="font-size:12.5px">${s.stageError}</div><div style="height:10px"></div>${lines}</div>`;
+    if (s.phase === 'unknown') return `<div class="card warnbox"><div style="font-size:12.5px"><b>提交结果待确认</b><br>${s.unknown}</div>
+      <div style="height:9px"></div><div class="msgbox bad">已禁止自动重试。去打卡榜核对后再决定，不要重交一次。</div>
+      <div style="height:8px"></div><button class="btn sm block" onclick="B.reset();render()">去打卡榜核对</button></div>`;
+    return '';
+  },
+  done() {
+    const s = this.state;
+    return `<div class="body">
+      <div class="bigocheck">✓</div>
+      <h2 class="t center">打卡成功</h2>
+      <p class="sub center">${NICK} · ${TODAY}</p>
+      <div class="card"><div class="kv">
+        <b>截图</b><span>${s.image.name}</span><b>录音</b><span>${s.audio.name}</span>
+        <b>感悟</b><span>${s.reflection ? '已填写' : '未填写'}</span></div></div>
+      <div class="center"><span class="datechip">今天已记录</span></div>
+      <button class="btn ghost block" onclick="B.reset();render()">返回打卡页</button>
+    </div>`;
+  },
+  notes() {
+    return [
+      { h: '这个变体的结构', items: ['没有步骤，一屏就是全部。', '底部提交条常驻，滚动时始终可见。', '材料来源交给共用的微信文件导入链，不占用主界面。'] },
+      { h: '试着点这些', items: ['点「选择运动时长截图」→ 进导入链选「运动记录.pdf」，看被拦下后不污染主界面。', '滚动页面，注意底部提交条一直跟着。', '在材料卡片点「✕」单独清掉一项。', '提交后看进度卡片就地展开，而不是换页。'] },
+      { h: '它要回答的问题', items: ['一屏放三件事，手机上会不会要滚很久？', '提交条常驻是否比页末按钮更容易被发现。'] },
+    ];
+  }
+};
+
+/*=========================== C · 极简双入口 ============================*/
+/* 流程压到最短：两个大槽 + 可折叠感悟；成功不换页，主界面直接变成一张凭证。 */
+const C = {
+  key: 'C', name: '极简双入口',
+  blurb: '流程压到最短：两个必填槽 + 可折叠感悟；成功不换页，主界面直接变成一张凭证。',
+  state: null, stepIndex: 0,
+  fresh() { return { image: emptyA(), audio: emptyA(), reflection: '', openReflection: false,
+    phase: 'idle', pct: 0, activeStage: 0, stageError: null, unknown: null, attempts: 0, timer: null }; },
+  setFile(kind, kitKey) {
+    const kit = pick(KIT, kind, kitKey); if (!kit) return;
+    const chat = chatOf(kit.chat);
+    this.state[kind] = toAttachment({ ...kit, source: `微信聊天 · ${chat.name}` });
+    this.state.stageError = null; render();
+  },
+  cancel(kind) { this.state[kind] = { ...emptyA(), status: 'cancelled', message: '你取消了选择，这一项保持未选择。' }; render(); },
+  ready() { return this.state.image.status === 'selected' && this.state.audio.status === 'selected'; },
+  submit() {
+    const s = this.state;
+    if (!this.ready() || s.phase === 'uploading') return;
+    s.attempts += 1; s.phase = 'uploading'; s.pct = 0; s.activeStage = 0; s.stageError = null; s.unknown = null;
+    render();                                             // 同上：先落一次 uploading
+    this.tick();
+  },
+  tick() {
+    const s = this.state;
+    if (s.timer) clearInterval(s.timer);
+    let p = 0, total = 3;
+    s.timer = setInterval(() => {
+      p += 10;
+      if (p >= 100) {
+        clearInterval(s.timer); s.timer = null;
+        if (s.activeStage === total - 1) { s.phase = 'success'; s.pct = 100; render(); return; }
+        s.activeStage += 1; s.pct = Math.round((s.activeStage / total) * 100); render(); C.tick(); return;
+      }
+      s.pct = Math.round(((s.activeStage + p / 100) / total) * 100); render();
+    }, 95);
+  },
+  failAt(stage) {
+    const s = this.state;
+    if (s.timer) { clearInterval(s.timer); s.timer = null; }
+    s.phase = 'failed'; s.activeStage = stage; s.pct = Math.round((stage / 3) * 100);
+    s.stageError = stage === 2 ? '登记失败：材料已上传，但没有写入记录。' : '上传中断：一整单需要重新上传。'; render();
+  },
+  unknownCase(which) {
+    const s = this.state;
+    if (s.timer) { clearInterval(s.timer); s.timer = null; }
+    s.phase = 'unknown'; s.activeStage = 3; s.pct = 100;
+    s.unknown = which === 'reg' ? UNKNOWN_REG : UNKNOWN_NET; render();
+  },
+  reset() { if (this.state && this.state.timer) clearInterval(this.state.timer); this.state = this.fresh(); },
+  runStep() {
+    const f = this.stepIndex;
+    this.reset();
+    this.setFile('image', 'img-ok'); this.setFile('audio', 'aud-ok');
+    if (f === 0) return;                                   // 成功：停就绪态，由用户自己点提交
+    if (f === 1) { this.submit(); setTimeout(() => { if (C.state.phase === 'uploading') C.failAt(1); }, 700); }
+    if (f === 2) { this.submit(); setTimeout(() => { if (C.state.phase === 'uploading') C.unknownCase('reg'); }, 900); }
+  },
+  view() {
+    const s = this.state;
+    const paths = ['成功', '失败', '结果未知'];
+    const bar = `<div class="body" style="padding-bottom:0">
+      <div class="card"><div class="row between" style="margin-bottom:8px"><span class="meta">演示主路径（一键切换）</span><span class="meta">${paths[this.stepIndex]}</span></div>
+        <div class="seg small">${paths.map((p, i) => `<button class="${i === this.stepIndex ? 'on' : ''}" onclick="C.stepIndex=${i};C.runStep();render()">${p}</button>`).join('')}</div>
+      </div></div>`;
+    return bar + (s.phase === 'success' ? this.done() : this.main());
+  },
+  main() {
+    const s = this.state;
+    const slot = (kind) => {
+      const att = s[kind], K = KINDS[kind];
+      const bad = ['invalid_type', 'too_large', 'read_failed'].includes(att.status), good = att.status === 'selected';
+      return `<div class="slot ${good ? 'filled' : bad ? 'bad' : ''}" id="${slotId(kind)}">
+        <div class="kind"><div class="ico ${kind === 'audio' ? 'aud' : ''}">${good ? '✓' : K.icon}</div>
+          <div class="txt"><b>${K.label}</b><span>${good || bad ? att.name : K.exts}</span></div></div>
+        ${bad ? `<div class="msgbox bad">${att.message}</div>` : good ? `<div class="note">${att.text} · 来源：${att.source}</div>` : `<div class="note">≤ ${K.maxText}${kind === 'audio' ? ' · 语音消息不能选，只收「作为文件发送」的录音' : ''}</div>`}
+        <div class="row">
+          ${good ? '' : `<button class="btn sm primary" onclick="Picker.open('${kind}','C')">从微信聊天选择</button>`}
+          ${good ? `<button class="btn sm ghost" onclick="C.setFile('${kind}','${kind === 'image' ? 'img-big' : 'aud-big'}')">演示：换成超限文件</button>` : ''}
+          ${good ? `<button class="btn sm ghost" onclick="C.setFile('${kind}','${kind === 'image' ? 'img-type' : 'aud-type'}')">演示：换成格式不符</button>` : ''}
+          ${good ? `<button class="btn sm ghost" onclick="C.state['${kind}']=emptyA();render()">清空</button>` : ''}
+        </div>
+      </div>`;
+    };
+    const busy = s.phase !== 'idle';
+    return `<div class="body">
+      <div class="row between"><h2 class="t">今天</h2><span class="meta">${NICK} · ${TODAY}</span></div>
+      <p class="sub">录音须由对方以「文件」发送；微信语音消息不能选。</p>
+      ${slot('image')}${slot('audio')}
+      ${s.openReflection
+        ? `<div class="field"><label>今日感悟（选填）</label><textarea class="input" placeholder="选填" oninput="C.state.reflection=this.value">${s.reflection}</textarea></div>`
+        : `<button class="btn ghost block" style="text-align:left" onclick="C.state.openReflection=true;render()">＋ 添加今日感悟（选填）</button>`}
+      ${s.phase === 'uploading' ? `<div class="card">
+        <div class="progress"><i style="width:${s.pct}%"></i></div>
+        <div class="counter" style="margin-top:5px">${s.pct}%</div><div style="height:10px"></div>
+        ${['prepare：校验并下发一次性凭证', 'COS PUT：两路并行上传', 'finalize：登记笔记与统计'].map((l, i) =>
+          `<div class="statusline ${i < s.activeStage ? 'done' : i === s.activeStage ? 'active' : ''}">${i < s.activeStage ? '<span class="okmark">✓</span>' : i === s.activeStage ? '<span class="spinner"></span>' : '<span class="dot"></span>'}<b>${l}</b></div>`).join('')}
+      </div>` : ''}
+      ${s.phase === 'failed' ? `<div class="card err"><div style="font-size:12.5px">${s.stageError}</div></div>
+        <button class="btn primary block" onclick="C.submit()">重新提交整单</button>` : ''}
+      ${s.phase === 'unknown' ? `<div class="card warnbox"><div style="font-size:12.5px"><b>提交结果待确认</b><br>${s.unknown}</div></div>
+        <div class="msgbox bad">已禁止自动重试，先核对再决定。</div>
+        <button class="btn block" onclick="C.reset();render()">去打卡榜核对</button>` : ''}
+      ${s.phase === 'idle' ? `<button class="btn primary block" ${this.ready() ? '' : 'disabled'} onclick="C.submit()">提交</button>` : ''}
+      <div class="meta center">已提交 ${s.attempts} 次 · 上传完成不等于成功</div>
+    </div>
+    <div class="stickyfoot"><div class="msgbox info">演示：<button class="chip" onclick="C.submit()">走一次真实提交</button>
+      <button class="chip" onclick="C.unknownCase('net')">模拟网络中断</button></div></div>`;
+  },
+  done() {
+    const s = this.state;
+    return `<div class="body">
+      <div class="slot filled" style="background:#fbfffd">
+        <div class="row between"><b style="font-size:14px">已记录 · ${TODAY}</b><span class="okmark">✓</span></div>
+        <div class="fileline" style="border:0;padding:0"><b>${s.image.name}</b></div>
+        <div class="fileline" style="padding-bottom:0"><b>${s.audio.name}</b></div>
+        ${s.reflection ? `<div class="fileline">感悟：${s.reflection.slice(0, 40)}${s.reflection.length > 40 ? '…' : ''}</div>` : ''}
+      </div>
+      <div class="meta center">成功不换页：主界面就地变成这张凭证。</div>
+      <button class="btn ghost block" onclick="C.reset();render()">返回打卡页</button>
+    </div>`;
+  },
+  notes() {
+    return [
+      { h: '这个变体的结构', items: ['只有两个必填槽，感悟默认折叠。', '成功不换页，主界面就地变成一张凭证。', '顶部一条演示条，一键切换三条主路径。'] },
+      { h: '试着点这些', items: ['顶部切到「失败」和「结果未知」，看主界面就地变化。', '把截图「换成不支持的格式」，错误只落在这一格。', '点「＋ 添加今日感悟」，看它展开时是否打乱布局。'] },
+      { h: '它要回答的问题', items: ['不换页的成功态，会不会让人怀疑「到底提交没提交」？', '折叠感悟是否等于让选填项被忽略。'] },
+    ];
+  }
+};
+
+/*=========================== 装配与导航 ============================*/
+const ORDER = ['A', 'B', 'C'];
+const VARIANTS = { A, B, C };
+/* 2026-10-01 拍板：骨架定为 A。B / C 保留作备查，不再是候选。 */
+const CHOSEN = 'A';
+const NAV = {
+  A: () => '戒色打卡',
+  B: () => '今日打卡',
+  C: () => (C.state.phase === 'success' ? '今日打卡' : '今天'),
+};
+let current = (new URLSearchParams(location.search).get('variant') || CHOSEN).toUpperCase();
+if (!VARIANTS[current]) current = CHOSEN;
+
+function render() {
+  const v = VARIANTS[current];
+  if (!v.state) v.state = v.fresh();
+  document.getElementById('head').innerHTML =
+    `<div class="row between" style="align-items:flex-start"><div>
+       <h2 style="margin:0;font-size:15px">${v.key} · ${v.name}</h2>
+       <p class="sub" style="max-width:540px;margin-top:3px">${v.blurb}</p></div>
+       <span class="chip ${v.key === CHOSEN ? 'on' : ''}">${v.key === CHOSEN ? '已选定' : '未采用 · 备查'}</span></div>`;
+  document.getElementById('captitle').textContent = Picker.stage !== 'closed'
+    ? Picker.title()
+    : NAV[v.key]();
+  document.getElementById('screen').innerHTML = v.view() + Picker.view();
+  const blocks = v.notes().map(n => `<div class="sidebox"><h3>${n.h}</h3>${n.items.map(i => `<div class="bullet"><span class="dot"></span><span>${i}</span></div>`).join('')}</div>`).join('');
+  document.getElementById('notes').innerHTML =
+    `<div class="sidebox"><h3>三个变体共用的后端契约</h3>
+      <div class="bullet"><span class="dot ok"></span><span>两路字节都直传 COS（ADR-0005），函数只发一次性凭证。</span></div>
+      <div class="bullet"><span class="dot ok"></span><span><b>verify → prepare → COS PUT ×2 → finalize</b>，与现有 H5 端是同一套接口。</span></div>
+      <div class="bullet"><span class="dot warn"></span><span>临时路径只在本生命周期有效，不跨启动保存、不回传 H5。</span></div>
+      <div class="bullet"><span class="dot ok"></span><span>finalize 结果未知时不自动重试；可手动「重交本次登记」，复用 <code>submission_id</code>，区分 <code>new</code> / <code>already</code>。</span></div>
+      <div class="bullet"><span class="dot bad"></span><span>不支持微信语音消息，只收「作为文件发送」的录音。</span></div>
+    </div>` + blocks +
+    `<div class="sidebox"><h3>这版原型不回答的事</h3><p>最终视觉规范和小程序发布审核细节；结果未知、重交、already / new 区分与榜单延迟提示已在 A 中呈现为候选。</p></div>
+    <div class="sidebox"><h3>导入链：一次调用（① ③ 都省）</h3>
+      <div class="bullet"><span class="dot ok"></span><span><b>点「从微信聊天选择」直接拉起原生选择器</b>（深色）：选聊天 → 选文件 → <b>确定即落子</b>。</span></div>
+      <div class="bullet"><span class="dot bad"></span><span>① 「空态引导页」（暂无任何文件 / 点击上传文件）<b>2026-10-01 已拍板省去</b>，改一点即弹。</span></div>
+      <div class="bullet"><span class="dot bad"></span><span>③ 「已选暂存页」（已选文件 1/20 + 继续添加 + 确认导入）<b>同日一并省去</b>，不再多一层确认。</span></div>
+      <div class="bullet"><span class="dot ok"></span><span><b>结果：本项目没有自建的小程序页面</b>——真机那两页都是 ima 自己写的（研究 #3 §3），我们只需调一次 <code>chooseMessageFile</code>。</span></div>
+      <div class="bullet"><span class="dot warn"></span><span>「录音须由对方以文件发送」这句提示改由打卡表单自己承载，不再依赖引导页。</span></div>
+      <div class="bullet"><span class="dot ok"></span><span>三个变体共用这条导入链，只换外壳——导入链与流程骨架是正交的两件事。</span></div>
+    </div>`;
+  document.getElementById('label').textContent = `${v.key} · ${v.name}　（${ORDER.indexOf(v.key) + 1} / 3${v.key === CHOSEN ? ' · 已选定' : ' · 未采用'}）`;
+}
+
+function goto(dir) {
+  current = ORDER[(ORDER.indexOf(current) + dir + ORDER.length) % ORDER.length];
+  const url = new URL(location.href); url.searchParams.set('variant', current);
+  history.replaceState(null, '', url); render();
+}
+document.getElementById('prev').onclick = () => goto(-1);
+document.getElementById('next').onclick = () => goto(1);
+document.getElementById('resetall').onclick = () => { VARIANTS[current].reset(); render(); };
+document.addEventListener('keydown', e => {
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'TEXTAREA' || e.target.isContentEditable) return;
+  if (e.key === 'ArrowLeft') goto(-1);
+  if (e.key === 'ArrowRight') goto(1);
+});
+
+/* A 的闸门按钮就地更新：勾选确认 / 重试确认都走这里，避免整屏重渲染打断输入。 */
+function syncGate() {
+  if (!A.state) return;
+  const up = document.getElementById('go-submit');
+  const retry = document.getElementById('go-resubmit');
+  if (!up && !retry) return;
+  const gate = A.state.phase === 'failed' || (A.state.phase === 'unknown' && A.state.confirmingRetry)
+    ? A.state.approvedRetry : (A.ready() && A.state.approvedUp);
+  if (up) up.disabled = !gate;
+  if (retry) retry.disabled = !(A.state.confirmingRetry && A.state.approvedRetry);
+  const t1 = document.getElementById('tick-up');
+  const t2 = document.getElementById('tick-retry');
+  if (t1) t1.classList.toggle('on', !!A.state.approvedUp);
+  if (t2) t2.classList.toggle('on', !!A.state.approvedRetry);
+}
+
+A.state = A.fresh(); B.state = B.fresh(); C.state = C.fresh();
+C.runStep();
+render();
+
+/* 原型自检用的桥；jsdom 下 const 不挂到 window，测试靠它驱动状态机。
+   生产代码不会带这个文件，留着也无副作用。 */
+window.__proto = { A, B, C, VARIANTS, ORDER, CHOSEN, render, syncGate, Picker, KIT, CHATS, chatOf, emptyA,
+  get current() { return current; }, set current(v) { current = v; },
+  goto };
+</script>
+</body>
+</html>
+
