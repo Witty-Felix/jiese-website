@@ -12,3 +12,8 @@ node_modules/
 
 # 部署暂存目录（白名单拷贝产物，见 deploy.sh）
 .deploy/
+
+# Codex / CodeGraph 本地生成产物，不入库
+.codegraph/
+graphify-out/
+.agents/skills/channel-aware-upload-size-contract/
