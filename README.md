@@ -1,6 +1,6 @@
 # 戒色打卡 · jiese-checkin
 
-> **v1.1.0** · 2026-09-25 · 新增 ima 知识库内的两层目录（ADR-0008）
+> **v1.2.0** · 2026-10-04 · 安全提交、结果未知重交与共享上传通道契约（ADR-0010、ADR-0014）
 > 线上地址：https://jiese-checkin.pages.dev
 
 一个轻量打卡站点。成员用「昵称 + 邀请码」进入，每天提交**运动时长截图**和**阅读录音**，
@@ -11,7 +11,7 @@
 
 ---
 
-## 功能特性（v1.1 范围）
+## 功能特性（v1.2 范围）
 
 | 模块 | 能力 |
 |------|------|
@@ -22,6 +22,9 @@
 | 打卡榜 | 全员累计天数 / 连续天数 / 最近打卡 / 今日是否已打卡，按累计天数排序；可手动刷新 |
 | 管理 | 管理密码解锁 → 单条删除（某用户某天）或整户清空；单条二确认、整户需输入昵称确认；每次删除写 KV 审计 |
 | 草稿 | 感悟内容本地暂存，刷新不丢；提交成功后自动清空表单与草稿 |
+| 安全提交 | `prepare` 签发 24 小时有效的 `submission_id`；`finalize` 以 `prepared → inflight → done` 去重，软锁过期可恢复 |
+| 结果未知 | H5 在 `finalize` 回执丢失时保存原提交检查点，显示「重交本次登记」；重交不重新 prepare、不重复 COS PUT，并区分 `new` / `already` |
+| 重复日期 | 同一天已有记录时先显式确认；确认后允许再次登记，但统计仍按自然日去重 |
 | 隐私边界 | **站内不提供任何删除 ima 内容的通道**——ima 知识库内容只能在 ima 客户端自行删除 |
 
 ---
@@ -32,10 +35,10 @@
 浏览器（纯静态前端：index.html / app.js / styles.css）
    │  ① POST  /api/verify          { nickname, invite_code }        —— 校验邀请码
    │        └─ 顺带「确保用户文件夹存在」（ADR-0008）；失败不阻断登录
-   │  ② POST  /api/prepare         { nickname, invite_code, image, audio }
-   │        └─ 返回预签名凭证；浏览器并行 PUT 两个文件直传 COS（不经本站服务器中转）
-   │  ③ POST  /api/finalize        { nickname, invite_code, reflection, image, audio }
-   │        └─ 确保日期文件夹 → 入库 ima（截图 + 录音 + 笔记）并写 KV 打卡记录
+   │  ② POST  /api/prepare         { nickname, invite_code, channel?, image, audio }
+   │        └─ 校验通道/体积，签发 submission_id 与预签名凭证；浏览器并行 PUT 两个文件直传 COS
+   │  ③ POST  /api/finalize        { nickname, invite_code, submission_id, channel?, reflection, image, audio }
+   │        └─ 幂等闸门 → 重复日期确认 → 确保日期文件夹 → 入库三样内容并写 KV 打卡记录
    │  ④ GET   /api/stats                                            —— 全员打卡天数
    │  ⑤ POST  /api/admin/verify    { admin_password }               —— 解锁管理模式
    │  ⑥ DELETE /api/admin/checkin  { admin_password, operator, nickname, date | all }
@@ -50,6 +53,9 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 ```
 
 请求流程要点：上传走 `prepare → 浏览器直传 COS → finalize` 三段式。这样既不让长期密钥进前端，
+也绕开了原先把大文件经 Cloudflare 边缘转传的瓶颈（15MB 需 20~38s），详见 ADR-0005。`prepare` 同时签发一次提交的 `submission_id`；
+如果 `finalize` 的结果未知，H5 只重交原检查点，不重新申请媒体、不重新上传。H5 省略 `channel` 继续使用 200 MiB 音频上限；
+其他客户端必须使用已登记的通道标识，未知标识会被拒绝。
 也绕开了原先把大文件经 Cloudflare 边缘转传的瓶颈（15MB 需 20~38s），详见 ADR-0005。
 
 ---
@@ -61,12 +67,15 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 ├── index.html                 # 单页：登录视图 / 打卡视图（含打卡榜与管理模式）/ 成功视图
 ├── app.js                     # 前端全部逻辑：登录、选文件与预览、直传、打卡榜、管理模式
 ├── styles.css                 # 样式
+├── miniprogram/upload-policy.js # 小程序音频前置校验、readFile 字节断言与通道标识策略
 ├── _headers                   # 响应头规则：app.js / styles.css 强制回源校验（改动前端无需手工改版本号）
 ├── deploy.sh                  # 部署脚本：白名单拷贝到 .deploy/ 再发布（**不要**直接部署仓库根目录）
 ├── wrangler.toml              # Pages 项目配置 + KV 绑定（binding STATS）
 ├── functions/api/             # Pages Functions（ES 模块；下划线前缀文件不参与路由）
 │   ├── _ima.js                #   ima OpenAPI 与 COS 签名封装、两层目录「确保存在」、时区工具
 │   ├── _stats.js              #   榜单行计算 + 删除标记读写（stats 与 admin 共用口径）
+│   ├── _submission.js         #   submission_id 状态机、24 小时 TTL、自然日判定
+│   ├── _upload-contract.js    #   H5/微信小程序通道与附件大小契约
 │   ├── verify.js              #   POST   /api/verify   （校验 + 确保用户文件夹）
 │   ├── prepare.js             #   POST   /api/prepare
 │   ├── finalize.js            #   POST   /api/finalize （确保日期文件夹 + 入库）
@@ -78,7 +87,7 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 ├── CONTEXT.md                 # 领域词汇表 + 架构总览（术语改动的唯一来源）
 ├── AGENTS.md                  # AI/协作者约定（issue 追踪、triage 标签、域文档位置）
 └── docs/
-    ├── adr/                   # 架构决策记录 0001–0008
+    ├── adr/                   # 架构决策记录 0001–0014
     └── agents/                # issue-tracker / triage-labels / domain 约定
 ```
 
@@ -252,7 +261,8 @@ sh deploy.sh
    KV 失败计数，或直接更换为更长的随机密码。
 3. **昵称即身份**：无用户表、无会话，知道邀请码的人可以冒用他人昵称打卡。这是 ADR-0002 的明确取舍。
 4. **ima OpenAPI 没有删除接口**：站内删掉统计记录不会影响 ima 中的内容（预期行为，也符合需求）。
-5. **附件规格受 ima 限制**：图片 ≤30MB、音频 ≤200MB；不支持视频，因此以运动 App 的时长截图代替。
+5. **附件规格受 ima 限制**：图片 ≤30MB；H5 省略 `channel` 时音频 ≤200 MiB；微信小程序通道为 ≤100 MiB。
+   协议使用精确的 MiB 字节边界；不支持视频，因此以运动 App 的时长截图代替。
 6. **强一致升级路径**：若日后需要强一致（成员增多或跨地域抱怨延迟），把统计迁到 Cloudflare D1
    （`checkin(nickname, date)` 唯一索引）即可，删除就是真实删除、无需标记。本期不做。
 7. **空文件夹不可回收**：登录即建档，意味着昵称打错或中途放弃会留下空文件夹；OpenAPI 上不存在任何
@@ -268,16 +278,16 @@ sh deploy.sh
 
 ## 验证方式
 
-本站没有引入测试框架，验证采用四种手段（改动统计数据路径、打卡表单或目录结构时应照做）：
+回归测试使用 Node.js 内置断言和 jsdom；验证采用以下手段（改动统计数据路径、打卡表单或目录结构时应照做）：
 
 | 手段 | 做法 | 适用 |
 |------|------|------|
-| 桩化 KV 回归测试 | 用内存 KV 模拟「list 缓存定格 60s」「get 抛错」，直接 import 真实 handler 调用 | 统计、删除、标记逻辑 |
+| 端点契约测试 | `node tests/submission-contract.test.mjs`，用内存 KV 与 ima 出站桩直调真实 `prepare` / `finalize` | submission_id、软锁、重复日期、通道/体积边界、无副作用拒绝 |
 | 桩化 ima 回归测试 | 直调真实 handler，**出站 HTTP 用可编程假实现替代**（可指令化表现为正常 / 已存在同名 / 报错 / 静默落根），断言假实现收到的请求 | 目录结构、建档幂等、分层降级 |
-| DOM 级端到端测试 | jsdom 加载真实 `index.html` + `app.js`，桩掉 fetch/XHR，跑完整提交流程 | 打卡表单、登录、管理模式 UI |
+| H5 流程测试 | `node tests/h5-flow.test.mjs`，jsdom 加载真实 `index.html` + `app.js`，桩掉 fetch/XHR | 结果未知重交、重复日期确认、原提交复用 |
 | 生产端场景复现 | 种数据 → 执行操作 → **毫秒级**立即拉 `/api/stats` 断言结果 | 一致性类问题 |
 
-> 说明：上述测试脚本目前是临时脚本，尚未入库。若需要长期回归保护，可放入 `tests/` 并配 `npm script`。
+> 说明：端点与 H5 回归测试已入库；运行 `npm test` 可执行全部 Node 测试。真实 COS/ima 与微信真机边界仍需在发布环境单独验收。
 
 前端资源缓存同样有两条约定：
 
@@ -294,6 +304,14 @@ sh deploy.sh
 ---
 
 ## 版本
+
+**v1.2.0**（2026-10-04）—— 为 `prepare → COS PUT → finalize` 增加安全提交契约：
+
+| 项 | 内容 |
+|-----|------|
+| [ADR-0010](docs/adr/0010-finalize-idempotency.md) | `submission_id` 状态机、24 小时提交记录、`inflight` 软锁、`new` / `already` 幂等回执与重复日期确认 |
+| [ADR-0014](docs/adr/0014-wechat-miniprogram-audio-cap.md) | H5 省略 `channel` 保持 200 MiB 音频契约；微信小程序通道使用精确标识并限制为 100 MiB |
+| 回归保护 | 端点级 KV/ima 桩测试 + jsdom H5 结果未知重交流程测试 + 小程序策略单测 |
 
 **v1.1.0**（2026-09-25）—— 新增 ima 知识库内的两层目录（`<昵称>/<YYYY-MM-DD>/`），自动建档、分层降级、
 打卡与登录永不因目录失败；同版一并加固部署边界（`deploy.sh` 白名单发布，修复凭据被公开发布的事故）：

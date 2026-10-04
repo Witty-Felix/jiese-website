@@ -6,7 +6,7 @@
   <title>戒色打卡 · 每天进步一点点</title>
   <!-- ?v= 版本标识：静态资源无版本号时会被浏览器/CDN 长期缓存，
        导致「修复已上线但用户仍跑旧前端」。改动 app.js/styles.css 后同步递增 -->
-  <link rel="stylesheet" href="styles.css?v=20260925-2" />
+  <link rel="stylesheet" href="styles.css?v=20261004-1" />
 </head>
 <body>
   <main class="wrap">
@@ -47,25 +47,27 @@
         <form id="checkin-form" novalidate>
           <div class="field">
             <label for="input-image">运动时长截图 <span class="req">必填</span></label>
-            <div class="filebox" id="box-image" tabindex="0" role="button" aria-label="选择运动截图">
+            <div class="filebox" id="box-image" tabindex="0" role="button" aria-label="选择或拖入运动截图" aria-describedby="feedback-image">
               <input id="input-image" type="file" accept="image/png,image/jpeg,image/webp" hidden />
               <div class="filebox-empty" id="empty-image">
-                <strong>点击选择或拖入截图</strong>
+                <strong>拖入微信截图，或点击系统选择</strong>
                 <span>PNG / JPG / WebP，≤ 30MB（运动 App 的时长页面截图即可）</span>
               </div>
               <div class="filebox-picked" id="picked-image" hidden></div>
+              <p class="filebox-feedback" id="feedback-image" aria-live="polite" hidden></p>
             </div>
           </div>
 
           <div class="field">
             <label for="input-audio">阅读戒色文章录音 <span class="req">必填</span></label>
-            <div class="filebox" id="box-audio" tabindex="0" role="button" aria-label="选择阅读录音">
+            <div class="filebox" id="box-audio" tabindex="0" role="button" aria-label="选择或拖入阅读录音">
               <input id="input-audio" type="file" accept=".mp3,.m4a,.wav,.aac,audio/mpeg,audio/mp4,audio/wav,audio/aac" hidden />
               <div class="filebox-empty" id="empty-audio">
-                <strong>点击选择或拖入录音</strong>
+                <strong>拖入微信文件中的录音，或点击系统选择</strong>
                 <span>MP3 / M4A / WAV / AAC，≤ 200MB</span>
               </div>
               <div class="filebox-picked" id="picked-audio" hidden></div>
+              <p class="filebox-feedback" id="feedback-audio" aria-live="polite" hidden></p>
             </div>
           </div>
 
@@ -77,7 +79,17 @@
           </div>
 
           <p id="checkin-error" class="error" hidden></p>
+          <p id="resume-hint" class="note" hidden></p>
           <button type="submit" class="btn btn-primary btn-block" id="checkin-btn" disabled>提交打卡</button>
+          <!-- 自然日闸门的确认位（ADR-0010）：finalize 说「今天已有记录」时就地提问，
+               不用 window.confirm —— 它是 await 之后才弹的，不在用户手势上下文里，微信内置浏览器会拦掉 -->
+          <div id="checkin-confirm" class="confirm" hidden>
+            <p id="checkin-confirm-text"></p>
+            <div class="confirm-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="confirm-no">不，今天不重复登记</button>
+              <button type="button" class="btn btn-primary btn-sm" id="confirm-yes">确认再登记一次</button>
+            </div>
+          </div>
           <div id="progress" class="progress" hidden>
             <div class="spinner"></div><span id="progress-text">上传材料中…</span>
           </div>
@@ -122,6 +134,6 @@
     </section>
   </main>
 
-  <script src="app.js?v=20260925-2"></script>
+  <script src="app.js?v=20261004-1"></script>
 </body>
 </html>

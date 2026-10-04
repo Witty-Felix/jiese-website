@@ -1,6 +1,6 @@
 # CONTEXT.md — 戒色打卡站（jiese-checkin）
 
-版本：**v1.1.0**（2026-09-25 新增 ima 两层目录，见 `README.md` 与 `docs/adr/0001`–`0008`）
+版本：**v1.2.0**（2026-10-04 增加安全提交与结果未知重交，见 `docs/adr/0010`；上传通道契约见 `docs/adr/0014`）
 线上地址：https://jiese-checkin.pages.dev
 
 一句话：一个轻量打卡网站，成员用昵称+邀请码进入，每天上传运动截图与阅读录音，内容沉淀到 ima 共享知识库「戒色」，打卡天数全员可见。
@@ -10,8 +10,12 @@
 | 术语 | 定义 |
 |------|------|
 | 打卡（Check-in） | 一次完整的每日提交 = 1 条笔记 + 1 张运动时长截图 + 1 段阅读录音 |
+| 提交标识（submission_id） | `prepare` 为一次提交签发的服务端 UUID；绑定昵称、业务日期和上传通道，`finalize` 用它区分同一次重交与新提交（ADR-0010） |
+| 提交状态 | `prepared`（已签发）、`inflight`（登记软锁）、`done`（已登记）；提交记录从签发起保留 24 小时 |
+| 登记结果未知 | COS 已上传但 `finalize` 回执没有到达客户端；H5 保留原 `submission_id`、媒体回执和感悟，用户只能显式点击「重交本次登记」 |
+| 上传通道 | H5 省略 `channel`，保持 200 MiB 音频契约；微信小程序使用精确标识 `wechat-miniprogram`，音频上限为 100 MiB |
 | 运动截图 | 运动类 App 显示运动视频/锻炼时长的截图（图片文件，非视频本身） |
-| 阅读录音 | 朗读戒色文章的音频文件（mp3/m4a/wav/aac） |
+| 阅读录音 | 朗读戒色文章的音频文件（mp3/m4a/wav/aac）；H5 上限 200 MiB，微信小程序通道上限 100 MiB |
 | 邀请码 | 共享口令，用于进入打卡界面；本身不标识身份，昵称才是身份 |
 | 打卡天数 | 某用户累计打卡的自然日数量（去重） |
 | 连续天数 | 当前连续未中断的打卡自然日数 |
@@ -37,10 +41,10 @@
 浏览器（纯静态前端 index.html / app.js / styles.css）
    │  ① POST /api/verify   { nickname, invite_code }   —— 校验邀请码
    │       └─ 顺带「确保用户文件夹存在」（ADR-0008）；失败不阻断登录（folder=degraded）
-   │  ② POST /api/prepare  { nickname, invite_code, image, audio }
-   │       └─ 下发预签名凭证；浏览器并行 PUT 两个文件直传 COS（ADR-0005）
-   │  ③ POST /api/finalize { nickname, invite_code, reflection, image, audio }
-   │       └─ 确保日期文件夹 → 入库三样内容 → 写 KV 打卡记录
+   │  ② POST /api/prepare  { nickname, invite_code, channel?, image, audio }
+   │       └─ 先校验通道/体积，签发 submission_id 与预签名凭证；浏览器并行 PUT 两个文件直传 COS
+   │  ③ POST /api/finalize { nickname, invite_code, submission_id, channel?, reflection, image, audio }
+   │       └─ 幂等闸门 → 重复日期确认 → 确保日期文件夹 → 入库三样内容 → 写 KV 打卡记录
    │  ④ GET  /api/stats                                —— 全员打卡天数
    │       list checkin:* → 逐用户 get deleted:*（ADR-0007，绕开 list 延迟）
    │  ⑤ POST /api/admin/verify                         —— 解锁管理模式（ADR-0006）
