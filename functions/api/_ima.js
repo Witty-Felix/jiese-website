@@ -24,7 +24,18 @@ async function imaPost(env, path, body) {
     headers: imaHeaders(env),
     body: JSON.stringify(body),
   });
-  return res.json(); // { code, msg, data }
+  const result = await res.json(); // { code, msg, data }
+  // 200002 is ima's credential rejection. Keep this distinct from a normal
+  // business error so callers can return an actionable configuration error
+  // instead of making users retry an upload that can never succeed.
+  if (result?.code === 200002 || res.status === 401) {
+    throw Object.assign(new Error('ima OpenAPI 凭据无效或已失效，请更新 Pages Secret 后重新部署'), {
+      code: 200002,
+      stage: 'ima_auth',
+      requestPath: path,
+    });
+  }
+  return result;
 }
 
 // Step 1：创建媒体，取得 media_id + COS 临时凭证

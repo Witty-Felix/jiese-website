@@ -1,6 +1,6 @@
 # CONTEXT.md — 戒色打卡站（jiese-checkin）
 
-版本：**v1.1.0**（2026-09-25 新增 ima 两层目录，见 `README.md` 与 `docs/adr/0001`–`0008`）
+版本：**v1.4.0**（2026-10-04 微信小程序音频通道上限，ADR-0014；见 `README.md` 与 `docs/adr/`）
 线上地址：https://jiese-checkin.pages.dev
 
 一句话：一个轻量打卡网站，成员用昵称+邀请码进入，每天上传运动截图与阅读录音，内容沉淀到 ima 共享知识库「戒色」，打卡天数全员可见。
@@ -10,8 +10,25 @@
 | 术语 | 定义 |
 |------|------|
 | 打卡（Check-in） | 一次完整的每日提交 = 1 条笔记 + 1 张运动时长截图 + 1 段阅读录音 |
+| 提交标识（submission_id） | 一次提交（一次 `prepare`）的服务端身份，由 `prepare` 签发并绑定「昵称 + 日期」。`finalize` 按它判重：同一次提交无论重交多少次，都只登记一次（ADR-0010） |
+| 提交（Submission） | 一次 `prepare → finalize` 流程对应的业务对象；同一 `submission_id` 从准备到成功登记保持不变。只有状态为“已成功登记”的提交才进入长期历史和打卡日统计；它与“打卡日”不是同一粒度（2026-10-02 数据模型决策） |
+| 打卡日（Check-in Day） | 某成员某个 Asia/Shanghai 自然日存在至少一条有效提交的聚合事实；同一成员同一天无论提交多少次只计一个打卡日（2026-10-02 数据模型决策） |
+| 成员（Member） | 系统中由稳定 `member_id` 标识的参与者；昵称是大小写敏感且创建后不自动改名的业务名称，但成员不是经过个人身份认证的账户 |
+| 提交状态 | 提交的业务生命周期：准备中、登记中、已成功登记、已放弃；基础设施错误和重试诊断不另造业务状态 |
+| 隐藏（Hidden） | 管理员对提交或打卡日施加的可见性状态；隐藏不物理删除长期记录、附件元信息或既定留存期限 |
+| 上传会话 | 与一个提交绑定的短期附件上传授权；只有两个附件均完成校验并进入成功登记事务后，上传对象才成为正式附件 |
+| 重交（Resubmit） | 登记结果未知（网络中断、回执丢失）后，**复用同一次 `prepare` 的回执**再发一次 `finalize`。服务端据此返回 `already`，不产生第二次登记（ADR-0010） |
+| 登记结果未知 | 素材已进 COS、但 `finalize` 的响应没有到达客户端的中间态：用户无法自行判断到底成功没有。重交能力就是为它存在的（ADR-0010） |
+| 重复日确认 | 本日已有打卡记录时，提交前显式问一次「确认要再登记一次吗？」。它**不拒绝**重复登记——「同一天可多次打卡」是既定规则，这里只是把重复从静默发生改成用户显式选择（ADR-0010） |
+| 留存打卡记录 | 打卡的长期历史凭据，包含昵称、打卡日期、提交时间、感悟及附件信息；原附件到期清理不使该记录失效，也不减少打卡天数（2026-10-01 确认的迁移目标，尚未上线） |
+| 附件保留期 | 运动截图和阅读录音原文件从成功登记时间起连续可供回看 168 小时（7×24 小时）；到期后允许原文件被清理而不可回看（2026-10-01 确认的迁移目标，尚未上线） |
+| 附件清理 | 对到期截图、录音原文件的删除，不是对打卡记录或统计的删除；迁移目标要求旧 ima 附件迁入自有服务器后也按成功登记起 168 小时清理，尚未迁入时不得伪报已清理 |
+| 附件清理记录 | 留存打卡记录中关于附件到期及实际清理的历史信息，用于区分仍可回看、待清理、已清理等情况；不包含已删除的原文件 |
+| 孤儿附件 | 已上传但尚未绑定到成功登记提交的临时对象；不属于 168 小时正式附件留存范围，应进入独立的短期清理流程，清理失败不影响任何已成功登记的记录 |
 | 运动截图 | 运动类 App 显示运动视频/锻炼时长的截图（图片文件，非视频本身） |
-| 阅读录音 | 朗读戒色文章的音频文件（mp3/m4a/wav/aac） |
+| 阅读录音 | 朗读戒色文章的音频文件（mp3/m4a/wav/aac）；H5 上限为 200 MiB，微信小程序通道上限为 100 MiB |
+| 上传通道 | 区分 H5 与微信小程序附件契约的来源标识；现有 H5 请求省略该标识，微信小程序使用 `wechat-miniprogram` |
+| 小程序音频上限 | 微信小程序阅读录音允许的最大字节数为 100 MiB（104,857,600 字节）；100 MiB + 1 字节必须拒绝，不引入分片上传 |
 | 邀请码 | 共享口令，用于进入打卡界面；本身不标识身份，昵称才是身份 |
 | 打卡天数 | 某用户累计打卡的自然日数量（去重） |
 | 连续天数 | 当前连续未中断的打卡自然日数 |
@@ -25,22 +42,33 @@
 | 整户清空 | 删除某昵称全部打卡统计记录，该用户从打卡榜消失；ima 内容不受影响（ADR-0006） |
 | 审计记录（Audit Record） | KV 键 `audit:del:<时间戳>:<操作者>`，记录每次删除的目标、范围与条数；只写不读（ADR-0006） |
 | 删除标记（Deletion Marker） | KV 键 `deleted:<昵称>`，记录该用户被删掉的日期；`/api/stats` 用 get 读它把已删日期减掉，绕开 KV list 最长约 60s 的最终一致延迟；重新打卡会撤销该日标记（ADR-0007） |
+| 迁移批次（Migration Batch） | 对一组冻结的旧 KV/ima 来源做一次可校验、可重跑的迁移工作单元；每条来源都有稳定标识、核验状态和校验和，批次未对账激活前不进入公开历史 |
+| 所有权切换时刻（Ownership Cutover） | 新提交从旧系统切换到自有服务器的明确时间边界；切换前签发的旧 `submission_id` 由旧系统排空，切换后新提交只归新系统，不做双写或跨系统自动回退 |
+| 旧来源清理状态（Legacy Cleanup Status） | 旧 ima 对象的实际清理证据，与新副本的清理状态分开记录；没有删除接口或人工验收证据时只能是待核验/人工处理，不得写成 `cleaned` |
+| 记录备份（Record Backup） | 只承载长期打卡记录、附件元信息、迁移与审计事实的备份；不把截图或录音原始字节作为长期备份内容，也不改变附件原有到期时间 |
+| 附件字节副本（Attachment Byte Copy） | 截图或录音原始字节在生产目录、临时目录、缓存、快照、备份或复制存储中的任一副本；每个副本都受原附件 `retained_until` 约束，到期后必须不可访问且不可恢复 |
+| 隔离恢复（Quarantined Restore） | 从备份或快照恢复到不接公网、不签发附件授权的环境，先按原 `retained_until` 校验、禁访和清理，再允许恢复结果对外服务；恢复不能重置留存期限 |
+| 清理销毁证据（Cleanup Destruction Evidence） | 能证明某个附件字节副本实际删除或目标不存在的长期审计事实；仅标记到期、禁止访问或发出删除请求不等于已清理 |
 
 ## 相关文档
 
 - `docs/adr/` — 架构决策记录
+- `docs/adr/0013-backup-snapshot-attachment-retention.md` — 备份、快照与附件副本清理一致性
+- `docs/adr/0014-wechat-miniprogram-audio-cap.md` — 微信小程序通道与 100 MiB 音频上限
 - 参考资料：WorkBuddy 空间《调查问卷网站实现机理总结》（survey-to-ima 同源架构）
 
 ## 架构总览
 
 ```
-浏览器（纯静态前端 index.html / app.js / styles.css）
+H5 浏览器（纯静态前端 index.html / app.js / styles.css）或微信小程序
    │  ① POST /api/verify   { nickname, invite_code }   —— 校验邀请码
    │       └─ 顺带「确保用户文件夹存在」（ADR-0008）；失败不阻断登录（folder=degraded）
-   │  ② POST /api/prepare  { nickname, invite_code, image, audio }
-   │       └─ 下发预签名凭证；浏览器并行 PUT 两个文件直传 COS（ADR-0005）
-   │  ③ POST /api/finalize { nickname, invite_code, reflection, image, audio }
-   │       └─ 确保日期文件夹 → 入库三样内容 → 写 KV 打卡记录
+   │  ② POST /api/prepare  { nickname, invite_code, channel?, image, audio }
+   │       └─ 按上传通道校验附件规格，签发 submission_id（落 KV `submission:<uuid>`）+ 预签名凭证；浏览器/小程序直传两个文件到 COS（ADR-0005/0014）
+   │          顺带上报 already_today，让成员在上传前就知道今天已有记录（ADR-0010）
+   │  ③ POST /api/finalize { nickname, invite_code, channel?, submission_id, reflection, image, audio, allow_duplicate_day? }
+   │       └─ 幂等闸门 → 日期文件夹 → 入库三样内容 → 写 KV 打卡记录
+   │          命中重交 → status=already 且零副作用；本日重复 → 409 待用户显式确认（ADR-0010）
    │  ④ GET  /api/stats                                —— 全员打卡天数
    │       list checkin:* → 逐用户 get deleted:*（ADR-0007，绕开 list 延迟）
    │  ⑤ POST /api/admin/verify                         —— 解锁管理模式（ADR-0006）
@@ -50,9 +78,10 @@
    │       仅删 KV 统计记录；ima 内容无站内删除通道，只能在 ima 自行删除
    ▼
 Cloudflare Pages Functions（持 ima 凭证与 KV）
+   │  submission:<uuid> → prepared / inflight / done 状态机，并保留小程序通道边界（ADR-0010/0014）
    │  ensureUserFolder(nickname) → get_knowledge_list 查根目录 → 未命中才 create_folder（ADR-0008）
    │  ensureDayFolder(userFolderId, date) → 同上，父级必须是该成员的用户文件夹，否则不建
-   │  create_media(图片/9) · create_media(录音/15) → 预签名 → 浏览器直传 COS
+   │  create_media(图片/9) · create_media(录音/15) → 预签名 → 浏览器/小程序直传 COS
    │  import_doc(笔记) → add_knowledge ×3，三样内容用同一个 folder_id
    │  KV 写入打卡记录（并撤销当日删除标记）
    ▼
