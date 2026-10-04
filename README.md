@@ -81,7 +81,11 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 │       ├── _auth.js           #   常量时间比对 + 统一 JSON 响应
 │       ├── verify.js          #   POST   /api/admin/verify
 │       └── checkin.js         #   DELETE /api/admin/checkin
-├── miniprogram/               # 小程序侧可复用上传策略（选择回调/字节断言/通道标识）
+├── miniprogram/               # 微信小程序入口与上传客户端（不建设额外空态/暂存页）
+│   ├── app.js                 # API 主机配置（默认 api.324614917.xyz）
+│   ├── checkin-client.js      # verify/prepare/readFile/COS PUT/finalize/安全重交
+│   ├── upload-policy.js       # chooseMessageFile、类型/大小闸门、字节断言
+│   └── pages/checkin/         # 单一分步向导页面
 ├── CONTEXT.md                 # 领域词汇表 + 架构总览（术语改动的唯一来源）
 ├── AGENTS.md                  # AI/协作者约定（issue 追踪、triage 标签、域文档位置）
 └── docs/
@@ -98,6 +102,22 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 - Node.js 18+（仅用于运行 `wrangler`，本项目本身没有构建步骤）
 - 一个 Cloudflare 账号（Pages + KV）
 - 一个 ima 共享知识库，以及在 ima.qq.com/agent-interface 生成的一对 OpenAPI 凭据
+### 微信小程序工程（Issue #32）
+
+`miniprogram/` 是独立的原生小程序工程入口，不参与 Pages 静态部署。打开微信开发者工具时选择该目录，
+并在小程序后台配置 API 主机和 ima 返回的 COS HTTPS 主机为服务器域名。默认 API 主机在
+`miniprogram/checkin-client.js` 中集中配置为 `https://api.324614917.xyz`；若发布环境不同，只改这一处。
+
+小程序只有一个打卡页面：点击材料按钮后直接调用 `wx.chooseMessageFile`，图片每次一张，录音只展示
+MP3/M4A/WAV/AAC；选择成功后沿用同一页状态，不建设空态引导页或已选暂存页。提交链路固定为：
+
+```text
+verify → prepare(channel: "wechat-miniprogram") → readFile → COS PUT ×2 → finalize
+```
+
+COS 直传使用带预签名头的 `wx.request` + `ArrayBuffer` 单次 `PUT`，不使用 `wx.uploadFile`、分片或断点续传。
+结果未知时本地只保存 `submission_id`、两份媒体回执、感悟和通道标识；再次提交跳过 `prepare` 和 COS PUT，
+直接重交同一登记。开发机可先运行 `npm run test:miniprogram` 验证客户端策略与契约模拟。
 
 ### 1. 创建 KV 命名空间
 

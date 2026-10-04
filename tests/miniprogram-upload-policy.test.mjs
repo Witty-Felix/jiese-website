@@ -8,8 +8,17 @@ import {
   validateAudioSelection,
   withUploadChannel,
 } from '../miniprogram/upload-policy.js';
+import {
+  IMAGE_MAX_BYTES as API_IMAGE_MAX_BYTES,
+  UPLOAD_CHANNEL as API_UPLOAD_CHANNEL,
+  WECHAT_AUDIO_LIMIT_ERROR as API_AUDIO_SIZE_ERROR,
+  WECHAT_AUDIO_MAX_BYTES as API_AUDIO_MAX_BYTES,
+} from '../functions/api/_upload-contract.js';
 
-assert.equal(AUDIO_MAX_BYTES, 100 * 1024 * 1024);
+assert.equal(AUDIO_MAX_BYTES, API_AUDIO_MAX_BYTES);
+assert.equal(AUDIO_SIZE_ERROR, API_AUDIO_SIZE_ERROR);
+assert.equal(UPLOAD_CHANNEL, API_UPLOAD_CHANNEL.WECHAT_MINIPROGRAM);
+assert.equal(API_IMAGE_MAX_BYTES, 30 * 1024 * 1024);
 assert.deepEqual(validateAudioSelection({ size: AUDIO_MAX_BYTES }), { ok: true, size: AUDIO_MAX_BYTES });
 assert.deepEqual(validateAudioSelection({ size: AUDIO_MAX_BYTES + 1 }), { ok: false, error: AUDIO_SIZE_ERROR });
 assert.deepEqual(validateAudioSelection({ size: 0 }), { ok: false, error: '录音大小无效' });

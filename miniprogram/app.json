@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "pages/checkin/checkin"
+  ],
+  "window": {
+    "navigationBarTitleText": "戒色打卡",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f4f7f5",
+    "backgroundTextStyle": "light"
+  },
+  "sitemapLocation": "sitemap.json"
+}

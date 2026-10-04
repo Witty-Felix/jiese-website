@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test tests/*.test.mjs tests/*.test.cjs",
     "test:contract": "node tests/submission-contract.test.mjs",
-    "test:h5": "node tests/h5-flow.test.mjs"
+    "test:h5": "node tests/h5-flow.test.mjs",
+    "test:miniprogram": "node tests/miniprogram-checkin.test.cjs && node tests/miniprogram-upload-policy.test.cjs"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"

@@ -1,0 +1,75 @@
+<view class="page">
+  <view wx:if="{{!loggedIn}}" class="card login-card">
+    <view class="eyebrow">JIESE CHECK-IN</view>
+    <view class="title">戒色打卡</view>
+    <view class="subtitle">从微信聊天直接选择今天的材料</view>
+    <form bindsubmit="onLogin">
+      <view class="label">昵称</view>
+      <input name="nickname" class="input" maxlength="16" placeholder="2–16 位中文、字母或数字" />
+      <view class="label">邀请码</view>
+      <input name="invite_code" class="input" password placeholder="向管理员获取" />
+      <button class="primary" formType="submit" loading="{{busy}}" disabled="{{busy}}">进入打卡</button>
+    </form>
+  </view>
+
+  <block wx:else>
+    <view class="topbar">
+      <view>
+        <view class="title">今日打卡</view>
+        <view class="subtitle">{{nickname}} · 两项材料都传好才算成功</view>
+      </view>
+      <button class="link-button" bindtap="logout" disabled="{{busy}}">退出</button>
+    </view>
+
+    <view class="card">
+      <view class="section-title">1. 运动截图</view>
+      <view class="hint">直接打开微信原生聊天选择器，每次只选择一张图片。</view>
+      <button class="select-button" bindtap="chooseImage" disabled="{{busy}}">从聊天选择运动截图</button>
+      <view wx:if="{{image}}" class="picked">
+        <view class="picked-main">
+          <view class="picked-name">{{image.name}}</view>
+          <view class="picked-meta">{{image.type}} · {{image.size}} 字节</view>
+        </view>
+        <button class="remove-button" bindtap="removeImage" disabled="{{busy}}">移除</button>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="section-title">2. 阅读录音</view>
+      <view class="hint">从聊天中选择“作为文件发送”的 MP3、M4A、WAV 或 AAC；上限 100 MiB。</view>
+      <button class="select-button" bindtap="chooseAudio" disabled="{{busy}}">从聊天选择阅读录音</button>
+      <view wx:if="{{audio}}" class="picked">
+        <view class="picked-main">
+          <view class="picked-name">{{audio.name}}</view>
+          <view class="picked-meta">{{audio.type}} · {{audio.size}} 字节</view>
+        </view>
+        <button class="remove-button" bindtap="removeAudio" disabled="{{busy}}">移除</button>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="section-title">3. 今日感悟 <text class="optional">选填</text></view>
+      <textarea class="textarea" maxlength="2000" value="{{reflection}}" bindinput="onReflectionInput" placeholder="今天想对自己说的话……" />
+      <view class="counter">{{reflection.length}} / 2000</view>
+    </view>
+
+    <view wx:if="{{busy}}" class="notice pending-notice">{{busyLabel}}</view>
+    <view wx:if="{{pending}}" class="notice pending-notice">
+      上一次登记没有收到结果。两份材料已经上传，点击“重交本次登记”会复用同一个 submission_id，不会重新申请媒体或再次上传。
+    </view>
+    <view wx:if="{{error}}" class="notice error-notice">{{error}}</view>
+    <view wx:if="{{success}}" class="notice success-notice">{{success}}</view>
+
+    <view wx:if="{{duplicatePrompt}}" class="confirm card">
+      <view class="confirm-title">重复日期确认</view>
+      <view class="hint">{{duplicateMessage}}</view>
+      <view class="confirm-actions">
+        <button class="secondary" bindtap="resolveDuplicate" data-answer="false">不再登记</button>
+        <button class="primary small" bindtap="resolveDuplicate" data-answer="true">确认再登记</button>
+      </view>
+    </view>
+
+    <button class="primary submit" bindtap="submit" loading="{{busy}}" disabled="{{busy || (!pending && (!image || !audio))}}">{{pending ? '重交本次登记' : '提交打卡'}}</button>
+    <view class="footnote">上传链路：verify → prepare → readFile → COS PUT ×2 → finalize</view>
+  </block>
+</view>
