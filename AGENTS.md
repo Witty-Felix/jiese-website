@@ -15,3 +15,7 @@ Default five-role triage vocabulary (`needs-triage` / `needs-info` / `ready-for-
 ### Domain docs
 
 Single-context layout: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+
+## Experience Capture
+
+After resolving a non-trivial, reusable problem, invoke the global xperience-capture Skill. The Skill must obtain user approval before creating a new project-level Skill.
