@@ -150,7 +150,7 @@ function bindFilebox(boxId, inputId, emptyId, pickedId, kind) {
   function clearFeedback() { showFeedback(''); }
   function setPicked(file) {
     if (!uploadType(file, kind)) {
-      reset();
+      // 拒绝新选择不等于移除已确认的材料：保留当前预览、大小和提交状态。
       showFeedback(isImage
         ? '无法识别这张图片，请选择 PNG / JPG / WebP；微信语音消息不支持。'
         : '无法识别这段录音，请选择 MP3 / M4A / WAV / AAC；微信语音消息不支持。');
@@ -158,7 +158,7 @@ function bindFilebox(boxId, inputId, emptyId, pickedId, kind) {
       return;
     }
     if (file.size > maxSize) {
-      reset();
+      // 超限选择也只显示错误；reset() 仅用于用户明确移除或成功清理。
       showFeedback(isImage ? '图片超过 30MB，请压缩后再试。' : '录音超过 200MB，请选择更小的文件。');
       input.value = '';
       return;
