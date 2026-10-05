@@ -35,7 +35,7 @@ function mimeTypeOf(file, kind) {
   if (kind === 'audio' && actual === 'audio/x-m4a') return 'audio/mp4';
   if (kind === 'audio' && actual === 'audio/x-wav') return 'audio/wav';
   if (!expected) return null;
-  if (!actual || actual === 'application/octet-stream' || actual === kind) return expected;
+  if (!actual || actual === 'application/octet-stream' || actual === kind || (kind === 'audio' && actual === 'file')) return expected;
   return actual === expected ? expected : null;
 }
 

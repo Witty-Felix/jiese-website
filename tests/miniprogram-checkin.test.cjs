@@ -99,6 +99,9 @@ const basePrepare = () => ({
   assert.equal(selectedAudio.size, AUDIO_MAX_BYTES);
   assert.deepEqual({ count: wx.calls.choose[0].count, type: wx.calls.choose[0].type }, { count: 1, type: 'image' });
   assert.deepEqual({ count: wx.calls.choose[1].count, type: wx.calls.choose[1].type, extension: wx.calls.choose[1].extension }, { count: 1, type: 'file', extension: ['mp3', 'm4a', 'wav', 'aac'] });
+  const genericAudioWx = makeWx({ audio: { ...audio, type: 'file' } });
+  const genericAudioClient = createCheckinClient(genericAudioWx, { apiBaseUrl: 'https://api.test', now: () => NOW, storage: makeStorage() });
+  assert.equal((await genericAudioClient.chooseAudioFile()).type, 'audio/mp4');
 }
 
 // A complete new submission uses verify -> prepare -> readFile -> two signed
