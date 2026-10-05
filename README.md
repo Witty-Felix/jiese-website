@@ -82,7 +82,8 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 │       ├── verify.js          #   POST   /api/admin/verify
 │       └── checkin.js         #   DELETE /api/admin/checkin
 ├── miniprogram/               # 微信小程序入口与上传客户端（不建设额外空态/暂存页）
-│   ├── app.js                 # API 主机配置（默认 api.324614917.xyz）
+│   ├── app.js                 # 按开发/预览/正式环境选择 API 主机
+│   ├── config.js              # Pages 调试主机与正式 API 子域
 │   ├── checkin-client.js      # verify/prepare/readFile/COS PUT/finalize/安全重交
 │   ├── upload-policy.js       # chooseMessageFile、类型/大小闸门、字节断言
 │   └── pages/checkin/         # 单一分步向导页面
@@ -105,8 +106,7 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 ### 微信小程序工程（Issue #32）
 
 `miniprogram/` 是独立的原生小程序工程入口，不参与 Pages 静态部署。打开微信开发者工具时选择该目录，
-并在小程序后台配置 API 主机和 ima 返回的 COS HTTPS 主机为服务器域名。默认 API 主机在
-`miniprogram/checkin-client.js` 中集中配置为 `https://api.324614917.xyz`；若发布环境不同，只改这一处。
+并在小程序后台配置正式 API 主机和 ima 返回的 COS HTTPS 主机为服务器域名。正式版 API 主机在 `miniprogram/config.js` 中配置为 `https://api.324614917.xyz`；开发者工具和预览版默认走 `https://jiese-checkin.pages.dev`，便于调试模式先完成真机冒烟。
 
 小程序只有一个打卡页面：点击材料按钮后直接调用 `wx.chooseMessageFile`，图片每次一张，录音只展示
 MP3/M4A/WAV/AAC；选择成功后沿用同一页状态，不建设空态引导页或已选暂存页。提交链路固定为：

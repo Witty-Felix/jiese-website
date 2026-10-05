@@ -1,8 +1,15 @@
+const { apiBaseUrlForEnv } = require('./config.js');
 const { DEFAULT_API_BASE_URL } = require('./checkin-client.js');
+
+function currentEnvVersion() {
+  try { return wx.getAccountInfoSync?.().miniProgram?.envVersion; } catch { return undefined; }
+}
 
 App({
   globalData: {
-    // 小程序后台「服务器域名」需配置此主机；H5 仍继续使用 Pages 地址。
-    apiBaseUrl: DEFAULT_API_BASE_URL,
+    // 开发者工具/预览走当前可用的 Pages API，便于调试模式真机冒烟；正式版
+    // 强制走可配置的备案 API 子域，避免把 Pages 域名误当成发布白名单方案。
+    apiBaseUrl: apiBaseUrlForEnv(currentEnvVersion()),
+    productionApiBaseUrl: DEFAULT_API_BASE_URL,
   },
 });
