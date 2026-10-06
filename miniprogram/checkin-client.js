@@ -277,7 +277,7 @@ function createCheckinClient(wx, options = {}) {
     return result;
   }
 
-  async function submit({ nickname, invite_code, reflection = '', image, audio, confirmDuplicateDay } = {}) {
+  async function uploadMaterials({ nickname, invite_code, reflection = '', image, audio, confirmDuplicateDay } = {}) {
     const cleanNickname = String(nickname || '').trim();
     const inviteCode = String(invite_code || '').trim();
     if (!cleanNickname || !inviteCode) {
@@ -285,15 +285,7 @@ function createCheckinClient(wx, options = {}) {
     }
 
     const pending = getPending(cleanNickname);
-    if (pending) {
-      return finishSubmission({
-        nickname: cleanNickname,
-        invite_code: inviteCode,
-        reflection: pending.reflection,
-        checkpoint: pending,
-        confirmDuplicateDay,
-      });
-    }
+    if (pending) return { ok: true, status: pending.phase === 'uploaded' ? 'uploaded' : 'pending', checkpoint: pending };
 
     if (!image || !audio) {
       throw makeError('请先选择运动截图和阅读录音', { code: 'missing_material', retryable: false });
@@ -331,6 +323,7 @@ function createCheckinClient(wx, options = {}) {
 
     const checkpoint = {
       version: PENDING_VERSION,
+      phase: 'uploaded',
       nickname: cleanNickname,
       date: prepared.date || todayDate(now()),
       channel: UPLOAD_CHANNEL,
@@ -342,13 +335,26 @@ function createCheckinClient(wx, options = {}) {
     };
     // 材料已全部到 COS，先落检查点，再发 finalize；否则结果未知时无法安全重交。
     savePending(checkpoint);
-    return finishSubmission({
-      nickname: cleanNickname,
-      invite_code: inviteCode,
-      reflection: checkpoint.reflection,
-      checkpoint,
-      confirmDuplicateDay,
-    });
+    return { ok: true, status: 'uploaded', checkpoint };
+  }
+
+  async function submit(options = {}) {
+    const nickname = String(options.nickname || '').trim();
+    const inviteCode = String(options.invite_code || '').trim();
+    if (!nickname || !inviteCode) throw makeError('请填写昵称和邀请码', { code: 'missing_credentials', retryable: false });
+    let checkpoint = getPending(nickname);
+    if (!checkpoint) {
+      const result = await uploadMaterials(options);
+      if (result.status === 'cancelled') return result;
+      checkpoint = result.checkpoint;
+    }
+    // Uploaded-only receipts allow reflection editing; after finalize starts,
+    // retries must keep the frozen payload, including legacy phase-less receipts.
+    if (checkpoint.phase === 'uploaded') {
+      checkpoint = { ...checkpoint, phase: 'finalizing', reflection: String(options.reflection || '').trim().slice(0, REFLECTION_MAX) };
+      savePending(checkpoint);
+    }
+    return finishSubmission({ nickname, invite_code: inviteCode, reflection: checkpoint.reflection, checkpoint, confirmDuplicateDay: options.confirmDuplicateDay });
   }
 
   return {
@@ -357,6 +363,7 @@ function createCheckinClient(wx, options = {}) {
     chooseAudioFile: () => chooseAudioFile(wx),
     clearPending,
     getPending,
+    uploadMaterials,
     submit,
     verify,
   };

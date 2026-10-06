@@ -44,7 +44,8 @@ export async function createMedia(env, { kbId, fileName, fileSize, contentType, 
     knowledge_base_id: kbId,
     file_name: fileName,
     file_size: fileSize,
-    content_type: contentType,
+    // ima infers media type from its supported MIME list, not the client MIME.
+    content_type: ({ 'audio/mp4': 'audio/x-m4a', 'audio/x-wav': 'audio/wav' })[contentType] || contentType,
     file_ext: fileExt,
   });
 }

@@ -289,6 +289,46 @@ const basePrepare = () => ({
   await assert.rejects(() => client.chooseAudioFile(), (error) => error.code === 'unsupported_type');
   assert.equal(wx.calls.requests.length, 0);
 }
+// Drive the real page callbacks: completing the second selector starts PUTs,
+// but does not finalize until the member explicitly submits their reflection.
+{
+  const wx = makeWx({ image, audio, bytes: { [image.path]: new ArrayBuffer(image.size), [audio.path]: new ArrayBuffer(audio.size) }, routes: { verify: { ok:true }, prepare: basePrepare(), finalize: { ok:true, status:'new', stats_updated:true } } });
+  const client = createCheckinClient(wx, { apiBaseUrl:'https://api.test', now:()=>NOW, storage:makeStorage() });
+  let definition;
+  global.Page = value => { definition=value; };
+  try { require('../miniprogram/pages/checkin/checkin.js'); } finally { delete global.Page; }
+  const page={ ...definition, data:{...definition.data, loggedIn:true, nickname:'member01', inviteCode:'test-code'}, client, setData(update){Object.assign(this.data,update);} };
+  await page.chooseImage();
+  assert.equal(wx.calls.requests.length,0);
+  await page.chooseAudio();
+  assert.equal(wx.calls.puts.length,2);
+  assert.equal(page.data.uploaded,true);
+  assert.equal(page.data.pending,false);
+  assert.equal(page.data.busy,false);
+  assert.equal(wx.calls.requests.filter(r=>new URL(r.url).pathname==='/api/finalize').length,0);
+  page.onReflectionInput({ detail:{value:'上传后填写的感悟'} });
+  await page.submit();
+  const final=wx.calls.requests.find(r=>new URL(r.url).pathname==='/api/finalize');
+  assert.equal(final.data.reflection,'上传后填写的感悟');
+  assert.equal(wx.calls.puts.length,2);
+  assert.equal(wx.calls.requests.filter(r=>new URL(r.url).pathname==='/api/prepare').length,1);
+  assert.equal(page.data.uploaded,false);
+}
+// Uploaded-only checkpoints survive reload; unknown outcomes freeze reflection.
+{
+  let attempts=0;
+  const storage=makeStorage();
+  const wx=makeWx({image,audio,bytes:{[image.path]:new ArrayBuffer(4),[audio.path]:new ArrayBuffer(4)},routes:{verify:{ok:true},prepare:basePrepare(),finalize:()=>{if(++attempts===1)return {fail:'request:fail timeout'}; return {ok:true,status:'already',stats_updated:true};}}});
+  let client=createCheckinClient(wx,{storage,now:()=>NOW});
+  await client.uploadMaterials({nickname:'member01',invite_code:'test-code',image,audio});
+  client=createCheckinClient(wx,{storage,now:()=>NOW});
+  await assert.rejects(()=>client.submit({nickname:'member01',invite_code:'test-code',reflection:'固定感悟'}),error=>error.code==='result_unknown');
+  const result=await client.submit({nickname:'member01',invite_code:'test-code',reflection:'不能覆盖'});
+  assert.equal(result.status,'already');
+  const finals=wx.calls.requests.filter(r=>new URL(r.url).pathname==='/api/finalize');
+  assert.equal(finals[1].data.reflection,'固定感悟');
+  assert.equal(wx.calls.puts.length,2);
+}
 console.log('✓ 微信小程序原生选择、安全提交、结果未知重交与错误闸门通过');
 
 }

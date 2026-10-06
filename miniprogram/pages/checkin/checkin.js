@@ -8,6 +8,7 @@ Page({
     image: null,
     audio: null,
     reflection: '',
+    uploaded: false,
     pending: false,
     busy: false,
     busyLabel: '',
@@ -37,7 +38,8 @@ Page({
   syncPending(nickname = this.data.nickname) {
     const pending = this.client?.getPending(nickname);
     this.setData({
-      pending: Boolean(pending),
+      pending: Boolean(pending && pending.phase !== 'uploaded'),
+      uploaded: Boolean(pending && pending.phase === 'uploaded'),
       ...(pending && !this.data.reflection ? { reflection: pending.reflection || '' } : {}),
     });
   },
@@ -65,45 +67,63 @@ Page({
 
   logout() {
     if (this.data.busy) return;
-    this.setData({ loggedIn: false, nickname: '', inviteCode: '', image: null, audio: null, reflection: '', pending: false });
+    this.setData({ loggedIn: false, nickname: '', inviteCode: '', image: null, audio: null, reflection: '', pending: false, uploaded: false });
     this.clearMessage();
   },
   async chooseImage() {
     if (this.data.busy) return;
+    if (this.data.pending) { this.showError(new Error('请先重交本次登记，确认结果后再选择新材料')); return; }
     this.clearMessage();
+    this.setData({ busy: true, busyLabel: '选择材料…' });
     try {
       const image = await this.client.chooseImageFile();
       // 重新选材料意味着开始新提交；结果未知重交只能继续使用旧回执。
       this.client.clearPending(this.data.nickname);
-      this.setData({ image, pending: false });
+      this.setData({ image, pending: false, uploaded: false });
+      await this.uploadWhenReady();
     } catch (error) {
       this.showError(error);
+    } finally {
+      this.setData({ busy: false, busyLabel: '' });
     }
   },
 
   async chooseAudio() {
     if (this.data.busy) return;
+    if (this.data.pending) { this.showError(new Error('请先重交本次登记，确认结果后再选择新材料')); return; }
     this.clearMessage();
+    this.setData({ busy: true, busyLabel: '选择材料…' });
     try {
       const audio = await this.client.chooseAudioFile();
       this.client.clearPending(this.data.nickname);
-      this.setData({ audio, pending: false });
+      this.setData({ audio, pending: false, uploaded: false });
+      await this.uploadWhenReady();
     } catch (error) {
       this.showError(error);
+    } finally {
+      this.setData({ busy: false, busyLabel: '' });
     }
   },
 
+  async uploadWhenReady() {
+    if (!this.data.image || !this.data.audio) return;
+    this.setData({ busyLabel: '材料齐备，正在自动上传…' });
+    const result = await this.client.uploadMaterials({ nickname: this.data.nickname, invite_code: this.data.inviteCode, image: this.data.image, audio: this.data.audio, confirmDuplicateDay: message => this.askDuplicateDay(message) });
+    if (result.status === 'cancelled') { this.showError(new Error(result.error)); return; }
+    this.syncPending();
+  },
+
   removeImage() {
-    if (this.data.busy) return;
+    if (this.data.busy || this.data.pending) return;
     this.client.clearPending(this.data.nickname);
-    this.setData({ image: null, pending: false });
+    this.setData({ image: null, pending: false, uploaded: false });
     this.clearMessage();
   },
 
   removeAudio() {
-    if (this.data.busy) return;
+    if (this.data.busy || this.data.pending) return;
     this.client.clearPending(this.data.nickname);
-    this.setData({ audio: null, pending: false });
+    this.setData({ audio: null, pending: false, uploaded: false });
     this.clearMessage();
   },
 
@@ -132,7 +152,7 @@ Page({
       return;
     }
     this.clearMessage();
-    this.setData({ busy: true, busyLabel: pending ? '重交本次登记…' : '准备材料并上传…' });
+    this.setData({ busy: true, busyLabel: pending?.phase === 'uploaded' ? '登记打卡…' : pending ? '重交本次登记…' : '准备材料并上传…' });
     try {
       const result = await this.client.submit({
         nickname: this.data.nickname,
@@ -153,6 +173,7 @@ Page({
         audio: null,
         reflection: '',
         pending: statsPending,
+        uploaded: false,
         success: statsPending
           ? '材料已经登记，但统计暂未更新；请重交本次登记以补齐统计，不会重复写入 ima。'
           : (already ? '本次是安全重交：此前已经登记成功，没有重复写入。' : '打卡成功：截图、录音和感悟已登记。'),
