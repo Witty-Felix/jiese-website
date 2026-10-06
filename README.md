@@ -106,10 +106,13 @@ ima 共享知识库「戒色」/ <用户文件夹> / <YYYY-MM-DD> / 笔记 · �
 ### 微信小程序工程（Issue #32）
 
 `miniprogram/` 是独立的原生小程序工程入口，不参与 Pages 静态部署。打开微信开发者工具时选择该目录，
+共享导入配置 `miniprogram/project.config.json` 已纳入版本控制（AppID 是公开项目标识，不是密钥）；
+个人设置 `project.private.config.json` 保留本机且忽略，不提交 AppSecret、邀请码或上传私钥。
 并在小程序后台配置正式 API 主机和 ima 返回的 COS HTTPS 主机为服务器域名。正式版 API 主机在 `miniprogram/config.js` 中配置为 `https://api.324614917.xyz`；开发者工具和预览版默认走 `https://jiese-checkin.pages.dev`，便于调试模式先完成真机冒烟。
 
 小程序只有一个打卡页面：点击材料按钮后直接调用 `wx.chooseMessageFile`，图片每次一张，录音只展示
-MP3/M4A/WAV/AAC；选择成功后沿用同一页状态，不建设空态引导页或已选暂存页。提交链路固定为：
+MP3/M4A/WAV/AAC；每份选择成功后立即校验，两份齐备后自动上传，上传后可继续编辑感悟，点击“提交打卡”才最终登记。
+沿用同一页状态，不建设空态引导页或已选暂存页。提交链路固定为：
 
 ```text
 verify → prepare(channel: "wechat-miniprogram") → readFile → COS PUT ×2 → finalize
@@ -412,3 +415,9 @@ sh deploy.sh
 ## 许可
 
 私人项目，未附开源许可证。
+
+## 双入口发布验收进度（2026-10-06）
+
+小程序正式 1.0.1 已有真机成功证据；这不等于 H5 与小程序综合验收完成。
+Issue #33 的真实环境闸门及未覆盖项见 [验收矩阵](docs/testing/dual-entry-release-acceptance.md)，
+发布状态见 [发布说明](docs/releases/2026-10-06-dual-entry-acceptance.md)。证据齐备前保持未完成。

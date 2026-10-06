@@ -17,3 +17,7 @@ node_modules/
 .codegraph/
 graphify-out/
 .agents/skills/channel-aware-upload-size-contract/
+
+# 临时部署副本与微信开发者工具个人配置
+.deploy2/
+miniprogram/project.private.config.json
